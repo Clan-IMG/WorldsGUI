@@ -4,8 +4,49 @@ prefix: [ WorldsGUI ]
 version: '${version}'
 
 main: net.clanimg.worldsGUI.WorldsGUI
-api-version: '1.21.11'
+api-version: '1.21'
 load: POSTWORLD
 
 authors: [ WrobelXXL ]
 website: https://clan-img.net
+
+libraries:
+  - org.mariadb.jdbc:mariadb-java-client:3.5.0
+
+commands:
+  nav:
+    description: Öffnet die WorldsGUI Navigation
+    permission: worldsgui.command.nav
+    usage: /nav
+  setspawn:
+    description: Setzt den Spawn deiner ausgewählten Welt
+    permission: worldsgui.command.setspawn
+    usage: /setspawn
+  rename:
+    description: Ändert den Anzeigenamen der ausgewählten Welt
+    permission: worldsgui.command.rename
+    usage: /rename [name]
+  icon:
+    description: Ändert das Icon der ausgewählten Welt
+    permission: worldsgui.command.icon
+    usage: /icon [material]
+
+permissions:
+  worldsgui.use:
+    description: Allgemeiner Zugriff auf WorldsGUI
+    default: true
+  worldsgui.command.nav:
+    description: Erlaubt /nav
+    default: true
+  worldsgui.command.setspawn:
+    description: Erlaubt /setspawn
+    default: true
+  worldsgui.command.rename:
+    description: Erlaubt /rename
+    default: true
+  worldsgui.command.icon:
+    description: Erlaubt /icon
+    default: true
+  worldsgui.admin:
+    description: Sieht private Welten in der Compass-Ansicht und darf sie betreten
+    default: op
