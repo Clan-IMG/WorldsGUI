@@ -1,8 +1,8 @@
 mysql:
-  host: "localhost"
+  host: "mariadb-j2ufav4erbhlfpdr669jx6hw"
   port: 3306
   database: "worldsgui"
-  username: "worldsgui_user"
+  username: "worldsgui"
   password: "4E+q5ygUrVwkfgdzVoksHBgaa45Ev4sv7UbLf7GS9O0="
 
 messages:
