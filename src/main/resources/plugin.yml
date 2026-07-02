@@ -1,0 +1,11 @@
+name: WorldsGUI
+description: $description
+prefix: [ WorldsGUI ]
+version: '${version}'
+
+main: net.clanimg.worldsGUI.WorldsGUI
+api-version: '1.21.11'
+load: POSTWORLD
+
+authors: [ WrobelXXL ]
+website: https://clan-img.net
