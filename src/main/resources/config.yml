@@ -1,9 +1,9 @@
 mysql:
-  host: "mariadb-j2ufav4erbhlfpdr669jx6hw"
-  port: 3306
+  host: "95.217.228.154"
+  port: 3309
   database: "worldsgui"
-  username: "worldsgui"
-  password: "4E+q5ygUrVwkfgdzVoksHBgaa45Ev4sv7UbLf7GS9O0="
+  username: "root"
+  password: "vAlV3cVfDR/PiauDdMlMKkObVZQKMJQhN5XFxYVEMm8="
 
 messages:
   prefix: "&3WorldsGUI &8» &7%messages%"

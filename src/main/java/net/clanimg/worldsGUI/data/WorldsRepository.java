@@ -226,6 +226,12 @@ public final class WorldsRepository {
     }
 
     private Connection openConnection() throws SQLException {
+        try {
+            Class.forName("org.mariadb.jdbc.Driver");
+        } catch (ClassNotFoundException ex) {
+            throw new SQLException("MariaDB-Treiber nicht gefunden", ex);
+        }
+
         String url = "jdbc:mariadb://" + host + ":" + port + "/" + database + "?useUnicode=true&characterEncoding=utf8";
         return DriverManager.getConnection(url, username, password);
     }

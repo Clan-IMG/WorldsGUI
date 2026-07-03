@@ -10,9 +10,6 @@ load: POSTWORLD
 authors: [ WrobelXXL ]
 website: https://clan-img.net
 
-libraries:
-  - org.mariadb.jdbc:mariadb-java-client:3.5.0
-
 commands:
   nav:
     description: Öffnet die WorldsGUI Navigation

@@ -106,6 +106,12 @@ public final class GuiManager {
         if (holder instanceof SettingsHolder settingsHolder) {
             event.setCancelled(true);
             handleSettingsClick(player, event, settingsHolder);
+            return;
+        }
+
+        if (holder instanceof IconSelectorHolder selectorHolder) {
+            event.setCancelled(true);
+            handleIconSelectorClick(player, event, selectorHolder);
         }
     }
 
@@ -232,9 +238,7 @@ public final class GuiManager {
                 if (!hasPermission(player, Permissions.ICON, true)) {
                     return;
                 }
-                pendingInputs.put(player.getUniqueId(), new PendingInput(PendingType.ICON, worldName));
-                player.closeInventory();
-                send(player, "icon-prompt");
+                openIconSelectorMenu(player, worldName, holder.returnPage());
             }
             case 14 -> {
                 if (!event.isShiftClick()) {
@@ -654,5 +658,96 @@ public final class GuiManager {
                 return;
             }
         }
+    }
+
+    private void openIconSelectorMenu(Player player, String worldName, int returnPage) {
+        int page = 0;
+        openIconSelectorMenuPage(player, worldName, returnPage, page);
+    }
+
+    private void openIconSelectorMenuPage(Player player, String worldName, int returnPage, int page) {
+        Inventory inv = Bukkit.createInventory(
+            new IconSelectorHolder(worldName, page, returnPage),
+            54,
+            Component.text("Icon auswählen - Seite " + (page + 1), NamedTextColor.DARK_AQUA)
+        );
+
+        List<Material> itemMaterials = new ArrayList<>();
+        for (Material material : Material.values()) {
+            if (material.isItem() && material != Material.AIR) {
+                itemMaterials.add(material);
+            }
+        }
+
+        int start = page * 45;
+        for (int i = 0; i < 45; i++) {
+            int idx = start + i;
+            if (idx >= itemMaterials.size()) {
+                break;
+            }
+            Material material = itemMaterials.get(idx);
+            inv.setItem(i, namedItem(material, "§b" + material.name()));
+        }
+
+        if (page > 0) {
+            inv.setItem(45, namedItem(Material.ARROW, "§fZurück"));
+        }
+
+        int maxPage = Math.max(0, (int) Math.ceil(itemMaterials.size() / 45.0) - 1);
+        if (page < maxPage) {
+            inv.setItem(53, namedItem(Material.ARROW, "§fWeiter"));
+        }
+
+        inv.setItem(49, namedItem(Material.SPRUCE_DOOR, "§fZurück zu Settings"));
+
+        player.openInventory(inv);
+    }
+
+    private void handleIconSelectorClick(Player player, InventoryClickEvent event, IconSelectorHolder holder) {
+        int slot = event.getRawSlot();
+        if (slot < 0 || slot >= 54) {
+            return;
+        }
+
+        ItemStack clicked = event.getCurrentItem();
+        if (clicked == null || clicked.getType() == Material.AIR) {
+            return;
+        }
+
+        if (slot == 45) {
+            if (holder.page() > 0) {
+                openIconSelectorMenuPage(player, holder.worldName(), holder.returnPage(), holder.page() - 1);
+            }
+            return;
+        }
+
+        if (slot == 53) {
+            List<Material> itemMaterials = new ArrayList<>();
+            for (Material material : Material.values()) {
+                if (material.isItem() && material != Material.AIR) {
+                    itemMaterials.add(material);
+                }
+            }
+
+            int maxPage = Math.max(0, (int) Math.ceil(itemMaterials.size() / 45.0) - 1);
+            if (holder.page() < maxPage) {
+                openIconSelectorMenuPage(player, holder.worldName(), holder.returnPage(), holder.page() + 1);
+            }
+            return;
+        }
+
+        if (slot == 49) {
+            openSettingsMenu(player, holder.worldName(), holder.returnPage());
+            return;
+        }
+
+        if (slot > 44) {
+            return;
+        }
+
+        Material selected = clicked.getType();
+        repository.setIcon(holder.worldName(), selected.name());
+        send(player, "icon-success", "%icon%", selected.name());
+        openSettingsMenu(player, holder.worldName(), holder.returnPage());
     }
 }
