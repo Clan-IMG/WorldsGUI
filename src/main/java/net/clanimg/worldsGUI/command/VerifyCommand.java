@@ -1,0 +1,29 @@
+package net.clanimg.worldsGUI.command;
+
+import net.clanimg.worldsGUI.gui.GuiManager;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+
+public final class VerifyCommand implements CommandExecutor {
+    private final GuiManager guiManager;
+
+    public VerifyCommand(GuiManager guiManager) {
+        this.guiManager = guiManager;
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage("Dieser Befehl ist nur für Spieler.");
+            return true;
+        }
+        if (args.length < 1) {
+            player.sendMessage("Usage: /verify <4-digit-code>");
+            return true;
+        }
+        guiManager.executeVerify(player, args[0]);
+        return true;
+    }
+}

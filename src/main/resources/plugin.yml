@@ -14,7 +14,7 @@ commands:
   nav:
     description: Öffnet die WorldsGUI Navigation
     permission: worldsgui.command.nav
-    usage: /nav
+    usage: /nav [create|delete|confirm|customer|setspawn|rename|icon]
   setspawn:
     description: Setzt den Spawn deiner ausgewählten Welt
     permission: worldsgui.command.setspawn
@@ -27,6 +27,10 @@ commands:
     description: Ändert das Icon der ausgewählten Welt
     permission: worldsgui.command.icon
     usage: /icon [material]
+  verify:
+    description: Verifiziert deinen Minecraft-Namen mit 4-stelligem Code aus dem Dashboard
+    permission: worldsgui.command.verify
+    usage: /verify <code>
 
 permissions:
   worldsgui.use:
@@ -34,6 +38,39 @@ permissions:
     default: true
   worldsgui.command.nav:
     description: Erlaubt /nav
+    default: true
+  worldsgui.command.nav.create:
+    description: Erlaubt /nav create
+    default: op
+  worldsgui.command.nav.delete:
+    description: Erlaubt /nav delete
+    default: op
+  worldsgui.command.nav.confirm:
+    description: Erlaubt /nav confirm
+    default: op
+  worldsgui.command.nav.nav.confirm:
+    description: Legacy-Alias für /nav confirm
+    default: op
+  worldsgui.command.nav.invite:
+    description: Erlaubt /nav customer invite
+    default: op
+  worldsgui.command.nav.remove:
+    description: Erlaubt /nav customer remove
+    default: op
+  worldsgui.command.nav.trust:
+    description: Erlaubt /nav customer trust
+    default: op
+  worldsgui.command.nav.untrust:
+    description: Erlaubt /nav customer untrust
+    default: op
+  worldsgui.command.nav.setspawn:
+    description: Erlaubt /nav setspawn
+    default: true
+  worldsgui.command.nav.rename:
+    description: Erlaubt /nav rename
+    default: true
+  worldsgui.command.nav.icon:
+    description: Erlaubt /nav icon
     default: true
   worldsgui.command.setspawn:
     description: Erlaubt /setspawn
@@ -43,6 +80,9 @@ permissions:
     default: true
   worldsgui.command.icon:
     description: Erlaubt /icon
+    default: true
+  worldsgui.command.verify:
+    description: Erlaubt /verify
     default: true
   worldsgui.admin:
     description: Sieht private Welten in der Compass-Ansicht und darf sie betreten

@@ -1,5 +1,6 @@
 package net.clanimg.worldsGUI.model;
 
+import java.util.List;
 import java.util.Optional;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -8,6 +9,9 @@ public record WorldEntry(
     String worldName,
     String ownerUuid,
     String ownerName,
+    String orderLabel,
+    List<String> invitedPlayers,
+    List<String> trustedPlayers,
     String displayName,
     String iconMaterial,
     boolean isPublic,

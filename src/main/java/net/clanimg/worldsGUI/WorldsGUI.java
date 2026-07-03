@@ -4,16 +4,21 @@ import net.clanimg.worldsGUI.command.IconCommand;
 import net.clanimg.worldsGUI.command.NavCommand;
 import net.clanimg.worldsGUI.command.RenameCommand;
 import net.clanimg.worldsGUI.command.SetSpawnCommand;
+import net.clanimg.worldsGUI.command.VerifyCommand;
 import net.clanimg.worldsGUI.data.WorldsRepository;
 import net.clanimg.worldsGUI.gui.GuiManager;
 import net.clanimg.worldsGUI.listener.ChatInputListener;
 import net.clanimg.worldsGUI.listener.InventoryListener;
+import net.clanimg.worldsGUI.listener.PlayerPresenceListener;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 
 public final class WorldsGUI extends JavaPlugin {
     private WorldsRepository repository;
     private GuiManager guiManager;
+    private BukkitTask joinRequestTask;
 
     @Override
     public void onEnable() {
@@ -48,9 +53,14 @@ public final class WorldsGUI extends JavaPlugin {
 
         Bukkit.getPluginManager().registerEvents(new InventoryListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(new ChatInputListener(guiManager), this);
+        Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(repository), this);
+
+        joinRequestTask = Bukkit.getScheduler().runTaskTimer(this, this::processJoinRequests, 40L, 40L);
 
         if (getCommand("nav") != null) {
-            getCommand("nav").setExecutor(new NavCommand(guiManager));
+            NavCommand navCommand = new NavCommand(guiManager);
+            getCommand("nav").setExecutor(navCommand);
+            getCommand("nav").setTabCompleter(navCommand);
         }
         if (getCommand("setspawn") != null) {
             getCommand("setspawn").setExecutor(new SetSpawnCommand(guiManager));
@@ -61,13 +71,66 @@ public final class WorldsGUI extends JavaPlugin {
         if (getCommand("icon") != null) {
             getCommand("icon").setExecutor(new IconCommand(guiManager));
         }
+        if (getCommand("verify") != null) {
+            getCommand("verify").setExecutor(new VerifyCommand(guiManager));
+        }
     }
 
     @Override
     public void onDisable() {
+        if (joinRequestTask != null) {
+            joinRequestTask.cancel();
+            joinRequestTask = null;
+        }
         if (guiManager != null) {
             guiManager.shutdown();
         }
+    }
+
+    private void processJoinRequests() {
+        for (WorldsRepository.JoinRequest request : repository.listPendingJoinRequests(30)) {
+            String transferCommand = buildVelocityTransferCommand(request.playerName(), request.worldName());
+            if (transferCommand != null) {
+                boolean dispatched = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), transferCommand);
+                if (dispatched) {
+                    repository.markJoinRequest(request.id(), "done", "Velocity transfer command dispatched");
+                } else {
+                    repository.markJoinRequest(request.id(), "failed", "Velocity transfer command failed");
+                }
+                continue;
+            }
+
+            Player player = Bukkit.getPlayerExact(request.playerName());
+            if (player == null || !player.isOnline()) {
+                repository.markJoinRequest(request.id(), "failed", "Player offline");
+                continue;
+            }
+
+            if (player.getWorld().getName().equalsIgnoreCase(request.worldName())) {
+                repository.markJoinRequest(request.id(), "done", "Already in world");
+                continue;
+            }
+
+            boolean ok = guiManager.executeDashboardJoin(player, request.worldName());
+            if (ok) {
+                repository.markJoinRequest(request.id(), "done", "Teleported");
+            } else {
+                repository.markJoinRequest(request.id(), "failed", "Join failed");
+            }
+        }
+    }
+
+    private String buildVelocityTransferCommand(String playerName, String worldName) {
+        String template = getConfig().getString("velocity.transfer-command", "");
+        if (template == null || template.isBlank()) {
+            return null;
+        }
+
+        String command = template
+            .replace("%player%", playerName)
+            .replace("%world%", worldName)
+            .trim();
+        return command.isBlank() ? null : command;
     }
 
     private void disablePluginWithReason(String reason) {

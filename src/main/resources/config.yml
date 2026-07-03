@@ -1,9 +1,30 @@
 mysql:
-  host: "95.217.228.154"
-  port: 3309
+  host: "worldsgui-db"
+  port: 3306
   database: "worldsgui"
   username: "root"
   password: "vAlV3cVfDR/PiauDdMlMKkObVZQKMJQhN5XFxYVEMm8="
+
+api:
+  # Base URL of api.clan-img.net (without trailing slash)
+  base-url: "https://api.clan-img.net"
+  # Must match API_TOKEN in the backend environment.
+  token: ""
+
+worldguard:
+  # Optional command templates for trust/untrust automation.
+  # Placeholders: %world% and %player%
+  # If empty, plugin uses:
+  # trust   -> rg addmember global -w %world% %player%
+  # untrust -> rg removemember global -w %world% %player%
+  trust-command: ""
+  untrust-command: ""
+
+velocity:
+  # Optional command template for network transfer from join requests.
+  # Example: "sendtoworld %player% %world%"
+  # Leave empty to use local Paper teleport fallback.
+  transfer-command: ""
 
 messages:
   prefix: "&3WorldsGUI &8» &7%messages%"
