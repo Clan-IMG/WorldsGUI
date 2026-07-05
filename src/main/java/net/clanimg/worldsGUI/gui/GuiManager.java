@@ -95,9 +95,9 @@ public final class GuiManager {
         }
 
         String baseUrl = resolveProfileApiBaseUrl();
-        String apiToken = plugin.getConfig().getString("api.token", "");
+        String apiToken = resolveProfileApiToken();
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
-            player.sendMessage("§cVerify ist nicht konfiguriert (api.base-url/api.token in config.yml).");
+            player.sendMessage("§cVerify ist nicht konfiguriert (api.base-url/api.profile-token bzw. api.token in config.yml).");
             return;
         }
 
@@ -144,9 +144,9 @@ public final class GuiManager {
         }
 
         String baseUrl = resolveProfileApiBaseUrl();
-        String apiToken = plugin.getConfig().getString("api.token", "");
+        String apiToken = resolveProfileApiToken();
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
-            player.sendMessage("§cUnverify ist nicht konfiguriert (api.base-url/api.token in config.yml).");
+            player.sendMessage("§cUnverify ist nicht konfiguriert (api.base-url/api.profile-token bzw. api.token in config.yml).");
             return;
         }
 
@@ -193,6 +193,14 @@ public final class GuiManager {
             return profileBase;
         }
         return plugin.getConfig().getString("api.base-url", "");
+    }
+
+    private String resolveProfileApiToken() {
+        String profileToken = plugin.getConfig().getString("api.profile-token", "");
+        if (profileToken != null && !profileToken.isBlank()) {
+            return profileToken;
+        }
+        return plugin.getConfig().getString("api.token", "");
     }
 
     public void executeNavSetSpawn(Player player, String worldName) {
