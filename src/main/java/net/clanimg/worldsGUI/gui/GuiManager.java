@@ -28,6 +28,8 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
+import org.bukkit.WorldCreator;
+import org.bukkit.WorldType;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -92,7 +94,7 @@ public final class GuiManager {
             return;
         }
 
-        String baseUrl = plugin.getConfig().getString("api.base-url", "");
+        String baseUrl = resolveProfileApiBaseUrl();
         String apiToken = plugin.getConfig().getString("api.token", "");
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
             player.sendMessage("§cVerify ist nicht konfiguriert (api.base-url/api.token in config.yml).");
@@ -134,6 +136,63 @@ public final class GuiManager {
             String finalMessage = message;
             Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(finalMessage));
         });
+    }
+
+    public void executeUnverify(Player player) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.UNVERIFY, true)) {
+            return;
+        }
+
+        String baseUrl = resolveProfileApiBaseUrl();
+        String apiToken = plugin.getConfig().getString("api.token", "");
+        if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
+            player.sendMessage("§cUnverify ist nicht konfiguriert (api.base-url/api.token in config.yml).");
+            return;
+        }
+
+        String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        String endpoint = normalizedBase + "/auth/profile/minecraft/verify/unverify-server";
+        String payload = "{\"mcName\":\"" + player.getName() + "\",\"playerName\":\"" + player.getName() + "\"}";
+
+        player.sendMessage("§7Entferne Verifizierung ...");
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String message;
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(endpoint))
+                    .header("Content-Type", "application/json")
+                    .header("X-API-Token", apiToken)
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
+                    .build();
+
+                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                String body = response.body() == null ? "" : response.body();
+
+                if (response.statusCode() / 100 == 2 && body.contains("\"ok\": true")) {
+                    message = "§aMinecraft-Verifizierung wurde entfernt.";
+                } else {
+                    String error = extractJsonString(body, "error");
+                    if (error == null || error.isBlank()) {
+                        error = "Unverify fehlgeschlagen.";
+                    }
+                    message = "§cUnverify fehlgeschlagen: §f" + error;
+                }
+            } catch (Exception ex) {
+                message = "§cUnverify fehlgeschlagen: §f" + ex.getMessage();
+            }
+
+            String finalMessage = message;
+            Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(finalMessage));
+        });
+    }
+
+    private String resolveProfileApiBaseUrl() {
+        String profileBase = plugin.getConfig().getString("api.profile-base-url", "");
+        if (profileBase != null && !profileBase.isBlank()) {
+            return profileBase;
+        }
+        return plugin.getConfig().getString("api.base-url", "");
     }
 
     public void executeNavSetSpawn(Player player, String worldName) {
@@ -880,14 +939,21 @@ public final class GuiManager {
 
     private void createWorld(Player player, String worldName, String orderLabel) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
-        String cmd = "mv create " + worldName + " normal -t flat";
 
-        ConsoleCommandSender console = Bukkit.getConsoleSender();
-        boolean dispatched = Bukkit.dispatchCommand(console, cmd);
-        if (!dispatched) {
+        WorldCreator creator = new WorldCreator(worldName)
+            .environment(World.Environment.NORMAL)
+            .type(WorldType.FLAT)
+            .generateStructures(false)
+            .generatorSettings("{\"biome\":\"minecraft:plains\",\"features\":false,\"lakes\":false,\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:dirt\",\"height\":100},{\"block\":\"minecraft:grass_block\",\"height\":1}]}");
+
+        World created = Bukkit.createWorld(creator);
+        if (created == null) {
             send(player, "create-failed", "%world%", worldName);
             return;
         }
+
+        ConsoleCommandSender console = Bukkit.getConsoleSender();
+        Bukkit.dispatchCommand(console, "mv import " + worldName + " normal");
 
         new BukkitRunnable() {
             @Override
@@ -956,6 +1022,8 @@ public final class GuiManager {
             return;
         }
 
+        evacuatePlayersFromWorld(worldName);
+
         boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv delete " + worldName);
         if (!ok) {
             send(player, "delete-failed");
@@ -964,6 +1032,42 @@ public final class GuiManager {
 
         repository.deleteWorld(worldName);
         send(player, "delete-success", "%world%", worldName);
+    }
+
+    private void evacuatePlayersFromWorld(String worldName) {
+        World target = Bukkit.getWorld(worldName);
+        if (target == null) {
+            return;
+        }
+
+        List<Player> affectedPlayers = new ArrayList<>(target.getPlayers());
+        for (Player affected : affectedPlayers) {
+            World ownFallback = resolveOwnFallbackWorld(affected, worldName);
+            if (ownFallback == null) {
+                affected.kickPlayer("Diese Welt wurde gelöscht.");
+                continue;
+            }
+
+            Location destination = ownFallback.getSpawnLocation();
+            affected.teleport(destination);
+            affected.sendMessage("§eDiese Welt wurde gelöscht. Du wurdest in deine Welt §f" + ownFallback.getName() + " §eteleportiert.");
+        }
+    }
+
+    private World resolveOwnFallbackWorld(Player player, String deletingWorldName) {
+        List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
+        for (WorldEntry entry : ownWorlds) {
+            String candidateName = entry.worldName();
+            if (candidateName.equalsIgnoreCase(deletingWorldName)) {
+                continue;
+            }
+
+            World candidate = Bukkit.getWorld(candidateName);
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     private boolean joinWorld(Player player, String worldName, boolean notify) {

@@ -1,6 +1,9 @@
 api:
-  # Base URL of api.clan-img.net (without trailing slash)
+  # Base URL for worlds endpoints (without trailing slash)
   base-url: "https://worldsgui.clan-img.net"
+  # Optional: Base URL for profile/verify endpoints.
+  # Set this to api.clan-img.net if /verify is handled by the main API service.
+  profile-base-url: ""
   # Must match API_TOKEN in the backend environment.
   token: ""
 

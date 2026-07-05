@@ -4,6 +4,7 @@ import net.clanimg.worldsGUI.command.IconCommand;
 import net.clanimg.worldsGUI.command.NavCommand;
 import net.clanimg.worldsGUI.command.RenameCommand;
 import net.clanimg.worldsGUI.command.SetSpawnCommand;
+import net.clanimg.worldsGUI.command.UnverifyCommand;
 import net.clanimg.worldsGUI.command.VerifyCommand;
 import net.clanimg.worldsGUI.data.WorldsRepository;
 import net.clanimg.worldsGUI.gui.GuiManager;
@@ -66,6 +67,9 @@ public final class WorldsGUI extends JavaPlugin {
         }
         if (getCommand("verify") != null) {
             getCommand("verify").setExecutor(new VerifyCommand(guiManager));
+        }
+        if (getCommand("unverify") != null) {
+            getCommand("unverify").setExecutor(new UnverifyCommand(guiManager));
         }
     }
 

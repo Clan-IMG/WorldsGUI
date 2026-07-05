@@ -31,6 +31,10 @@ commands:
     description: Verifiziert deinen Minecraft-Namen mit 4-stelligem Code aus dem Dashboard
     permission: worldsgui.command.verify
     usage: /verify <code>
+  unverify:
+    description: Entfernt deine Minecraft-Verifizierung
+    permission: worldsgui.command.unverify
+    usage: /unverify
 
 permissions:
   worldsgui.use:
@@ -83,6 +87,9 @@ permissions:
     default: true
   worldsgui.command.verify:
     description: Erlaubt /verify
+    default: true
+  worldsgui.command.unverify:
+    description: Erlaubt /unverify
     default: true
   worldsgui.admin:
     description: Sieht private Welten in der Compass-Ansicht und darf sie betreten
