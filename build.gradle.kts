@@ -11,7 +11,7 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    implementation("org.mariadb.jdbc:mariadb-java-client:3.5.0")
+    implementation("com.google.code.gson:gson:2.11.0")
 }
 
 java {

@@ -24,28 +24,21 @@ public final class WorldsGUI extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
 
-        String host = getConfig().getString("mysql.host", "localhost");
-        int port = getConfig().getInt("mysql.port", 3306);
-        String database = getConfig().getString("mysql.database", "worldsgui");
-        String username = getConfig().getString("mysql.username", "worldsgui_user");
-        String password = getConfig().getString("mysql.password", "");
+        String apiBaseUrl = getConfig().getString("api.base-url", "");
+        String apiToken = getConfig().getString("api.token", "");
 
-        if (database == null || database.isBlank()) {
-            disablePluginWithReason("MySQL database ist leer oder fehlt in config.yml (mysql.database).");
+        if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
+            disablePluginWithReason("API base-url ist leer oder fehlt in config.yml (api.base-url).");
             return;
         }
-        if (host == null || host.isBlank()) {
-            disablePluginWithReason("MySQL host ist leer oder fehlt in config.yml (mysql.host).");
-            return;
-        }
-        if (username == null || username.isBlank()) {
-            disablePluginWithReason("MySQL username ist leer oder fehlt in config.yml (mysql.username).");
+        if (apiToken == null || apiToken.isBlank()) {
+            disablePluginWithReason("API token ist leer oder fehlt in config.yml (api.token).");
             return;
         }
 
-        repository = new WorldsRepository(this, host, port, database, username, password);
+        repository = new WorldsRepository(this, apiBaseUrl, apiToken);
         if (!repository.initialize()) {
-            disablePluginWithReason("MySQL/MariaDB konnte nicht initialisiert werden: " + repository.lastInitializeError());
+            disablePluginWithReason("API konnte nicht initialisiert werden: " + repository.lastInitializeError());
             return;
         }
 

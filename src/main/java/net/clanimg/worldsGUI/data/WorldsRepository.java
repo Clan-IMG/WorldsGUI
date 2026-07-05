@@ -1,10 +1,17 @@
 package net.clanimg.worldsGUI.data;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -14,57 +21,43 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class WorldsRepository {
     private final JavaPlugin plugin;
-    private final String host;
-    private final int port;
-    private final String database;
-    private final String username;
-    private final String password;
+    private final String apiBaseUrl;
+    private final String apiToken;
+    private final HttpClient httpClient;
+    private final Gson gson;
     private String lastInitializeError = "Unbekannter Fehler";
 
-    public WorldsRepository(JavaPlugin plugin, String host, int port, String database, String username, String password) {
+    public WorldsRepository(JavaPlugin plugin, String apiBaseUrl, String apiToken) {
         this.plugin = plugin;
-        this.host = host;
-        this.port = port;
-        this.database = database;
-        this.username = username;
-        this.password = password;
+        this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
+        this.apiToken = apiToken;
+        this.httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(6))
+            .build();
+        this.gson = new Gson();
     }
 
     public boolean initialize() {
-        String sql = """
-            CREATE TABLE IF NOT EXISTS worldsgui_worlds (
-                world_name VARCHAR(64) PRIMARY KEY,
-                owner_uuid VARCHAR(36) NOT NULL,
-                owner_name VARCHAR(16) NOT NULL,
-                order_label VARCHAR(16) NULL,
-                invited_players TEXT NULL,
-                trusted_players TEXT NULL,
-                world_index INT NOT NULL,
-                display_name VARCHAR(64) NOT NULL,
-                icon_material VARCHAR(64) NOT NULL,
-                is_public BOOLEAN NOT NULL DEFAULT TRUE,
-                spawn_x DOUBLE NULL,
-                spawn_y DOUBLE NULL,
-                spawn_z DOUBLE NULL,
-                spawn_yaw FLOAT NULL,
-                spawn_pitch FLOAT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_owner_uuid (owner_uuid),
-                INDEX idx_public (is_public)
-            )
-            """;
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
-            ensureOrderLabelColumn(connection);
-            ensureInvitedPlayersColumn(connection);
-            ensureTrustedPlayersColumn(connection);
-            ensurePlayerPresenceTable(connection);
-            ensureJoinRequestsTable(connection);
+        if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
+            lastInitializeError = "API base URL fehlt";
+            return false;
+        }
+        if (apiToken == null || apiToken.isBlank()) {
+            lastInitializeError = "API token fehlt";
+            return false;
+        }
+
+        try {
+            ApiResponse response = request("POST", "/worlds/bootstrap", "{}");
+            if (response.statusCode() / 100 != 2) {
+                lastInitializeError = "Bootstrap fehlgeschlagen (HTTP " + response.statusCode() + ")";
+                return false;
+            }
             lastInitializeError = "";
             return true;
-        } catch (SQLException ex) {
+        } catch (Exception ex) {
             lastInitializeError = ex.getMessage();
-            plugin.getLogger().severe("Fehler beim Initialisieren der DB (" + host + ":" + port + "/" + database + "): " + ex.getMessage());
+            plugin.getLogger().severe("Fehler beim Initialisieren über API: " + ex.getMessage());
             return false;
         }
     }
@@ -74,18 +67,19 @@ public final class WorldsRepository {
     }
 
     public int nextWorldIndex(String ownerUuid) {
-        String sql = "SELECT COALESCE(MAX(world_index), 0) + 1 AS next_idx FROM worldsgui_worlds WHERE owner_uuid = ?";
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, ownerUuid);
-            try (ResultSet rs = statement.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getInt("next_idx");
-                }
+        try {
+            String path = "/worlds/next-index?ownerUuid=" + encode(ownerUuid);
+            ApiResponse response = request("GET", path, null);
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("nextWorldIndex API Fehler: HTTP " + response.statusCode());
+                return 1;
             }
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Ermitteln des Weltindex: " + ex.getMessage());
+            JsonObject json = parseObject(response.body());
+            return getInt(json, "nextIndex", 1);
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Ermitteln des Weltindex via API: " + ex.getMessage());
+            return 1;
         }
-        return 1;
     }
 
     public void insertWorld(
@@ -98,357 +92,350 @@ public final class WorldsRepository {
         String iconMaterial,
         boolean isPublic
     ) {
-        String sql = """
-            INSERT INTO worldsgui_worlds
-            (world_name, owner_uuid, owner_name, order_label, invited_players, trusted_players, world_index, display_name, icon_material, is_public)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """;
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, worldName);
-            statement.setString(2, ownerUuid);
-            statement.setString(3, ownerName);
-            statement.setString(4, orderLabel);
-            statement.setString(5, "");
-            statement.setString(6, "");
-            statement.setInt(7, worldIndex);
-            statement.setString(8, displayName);
-            statement.setString(9, iconMaterial);
-            statement.setBoolean(10, isPublic);
-            statement.executeUpdate();
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Speichern der Welt: " + ex.getMessage());
+        JsonObject body = new JsonObject();
+        body.addProperty("worldName", worldName);
+        body.addProperty("ownerUuid", ownerUuid);
+        body.addProperty("ownerName", ownerName);
+        if (orderLabel == null) {
+            body.add("orderLabel", null);
+        } else {
+            body.addProperty("orderLabel", orderLabel);
         }
+        body.addProperty("worldIndex", worldIndex);
+        body.addProperty("displayName", displayName);
+        body.addProperty("iconMaterial", iconMaterial);
+        body.addProperty("isPublic", isPublic);
+        postOrWarn("/worlds", body);
     }
 
     public void setInvitedPlayers(String worldName, List<String> players) {
-        updateSingleField(worldName, "invited_players", joinPlayers(players));
+        JsonObject body = new JsonObject();
+        JsonArray values = new JsonArray();
+        for (String player : players) {
+            values.add(player);
+        }
+        body.add("values", values);
+        patchOrWarn("/worlds/" + encode(worldName) + "/invited-players", body);
     }
 
     public void setTrustedPlayers(String worldName, List<String> players) {
-        updateSingleField(worldName, "trusted_players", joinPlayers(players));
+        JsonObject body = new JsonObject();
+        JsonArray values = new JsonArray();
+        for (String player : players) {
+            values.add(player);
+        }
+        body.add("values", values);
+        patchOrWarn("/worlds/" + encode(worldName) + "/trusted-players", body);
     }
 
     public Optional<WorldEntry> findByWorldName(String worldName) {
-        String sql = "SELECT * FROM worldsgui_worlds WHERE world_name = ?";
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, worldName);
-            try (ResultSet rs = statement.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(mapEntry(rs));
-                }
+        try {
+            ApiResponse response = request("GET", "/worlds/" + encode(worldName), null);
+            if (response.statusCode() == 404) {
+                return Optional.empty();
             }
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Laden der Weltdaten: " + ex.getMessage());
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("findByWorldName API Fehler: HTTP " + response.statusCode());
+                return Optional.empty();
+            }
+            JsonObject json = parseObject(response.body());
+            JsonObject world = json.has("world") && json.get("world").isJsonObject()
+                ? json.getAsJsonObject("world")
+                : null;
+            if (world == null) {
+                return Optional.empty();
+            }
+            return Optional.of(mapEntry(world));
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Laden der Weltdaten via API: " + ex.getMessage());
+            return Optional.empty();
         }
-        return Optional.empty();
     }
 
     public List<WorldEntry> listOwnWorlds(String ownerUuid) {
-        String sql = "SELECT * FROM worldsgui_worlds WHERE owner_uuid = ? ORDER BY created_at DESC";
-        List<WorldEntry> entries = new ArrayList<>();
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, ownerUuid);
-            try (ResultSet rs = statement.executeQuery()) {
-                while (rs.next()) {
-                    entries.add(mapEntry(rs));
-                }
-            }
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Laden eigener Welten: " + ex.getMessage());
-        }
-        return entries;
+        return listWorlds("/worlds/owner/" + encode(ownerUuid), "eigener Welten");
     }
 
     public List<WorldEntry> listDiscoverableWorlds(String viewerUuid, boolean admin) {
-        String sql = admin
-            ? "SELECT * FROM worldsgui_worlds WHERE owner_uuid <> ? ORDER BY created_at DESC"
-            : "SELECT * FROM worldsgui_worlds WHERE owner_uuid <> ? AND is_public = TRUE ORDER BY created_at DESC";
-        List<WorldEntry> entries = new ArrayList<>();
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, viewerUuid);
-            try (ResultSet rs = statement.executeQuery()) {
-                while (rs.next()) {
-                    entries.add(mapEntry(rs));
-                }
-            }
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Laden öffentlicher Welten: " + ex.getMessage());
-        }
-        return entries;
+        String path = "/worlds/discoverable?viewerUuid=" + encode(viewerUuid) + "&admin=" + admin;
+        return listWorlds(path, "öffentlicher Welten");
     }
 
     public List<WorldEntry> listInvitedWorlds(String playerName) {
-        String sql = "SELECT * FROM worldsgui_worlds ORDER BY created_at DESC";
-        List<WorldEntry> entries = new ArrayList<>();
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            try (ResultSet rs = statement.executeQuery()) {
-                while (rs.next()) {
-                    WorldEntry entry = mapEntry(rs);
-                    if (containsIgnoreCase(entry.invitedPlayers(), playerName)) {
-                        entries.add(entry);
-                    }
-                }
-            }
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Laden eingeladener Welten: " + ex.getMessage());
-        }
-        return entries;
+        return listWorlds("/worlds/invited/" + encode(playerName), "eingeladener Welten");
     }
 
     public void setPublic(String worldName, boolean value) {
-        updateSingleField(worldName, "is_public", value);
+        JsonObject body = new JsonObject();
+        body.addProperty("value", value);
+        patchOrWarn("/worlds/" + encode(worldName) + "/public", body);
     }
 
     public void setDisplayName(String worldName, String value) {
-        updateSingleField(worldName, "display_name", value);
+        JsonObject body = new JsonObject();
+        body.addProperty("value", value);
+        patchOrWarn("/worlds/" + encode(worldName) + "/display-name", body);
     }
 
     public void setIcon(String worldName, String value) {
-        updateSingleField(worldName, "icon_material", value);
+        JsonObject body = new JsonObject();
+        body.addProperty("value", value);
+        patchOrWarn("/worlds/" + encode(worldName) + "/icon", body);
     }
 
     public void setSpawn(String worldName, Location loc) {
-        String sql = """
-            UPDATE worldsgui_worlds
-            SET spawn_x = ?, spawn_y = ?, spawn_z = ?, spawn_yaw = ?, spawn_pitch = ?
-            WHERE world_name = ?
-            """;
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setDouble(1, loc.getX());
-            statement.setDouble(2, loc.getY());
-            statement.setDouble(3, loc.getZ());
-            statement.setFloat(4, loc.getYaw());
-            statement.setFloat(5, loc.getPitch());
-            statement.setString(6, worldName);
-            statement.executeUpdate();
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Speichern des Spawns: " + ex.getMessage());
-        }
+        JsonObject body = new JsonObject();
+        body.addProperty("x", loc.getX());
+        body.addProperty("y", loc.getY());
+        body.addProperty("z", loc.getZ());
+        body.addProperty("yaw", loc.getYaw());
+        body.addProperty("pitch", loc.getPitch());
+        patchOrWarn("/worlds/" + encode(worldName) + "/spawn", body);
     }
 
     public void deleteWorld(String worldName) {
-        String sql = "DELETE FROM worldsgui_worlds WHERE world_name = ?";
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, worldName);
-            statement.executeUpdate();
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Löschen der Welt in DB: " + ex.getMessage());
+        try {
+            ApiResponse response = request("DELETE", "/worlds/" + encode(worldName), null);
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("deleteWorld API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Löschen der Welt via API: " + ex.getMessage());
         }
     }
 
     public void upsertPlayerPresence(String playerName, String currentWorld, boolean online) {
-        String sql = """
-            INSERT INTO worldsgui_player_presence (player_name, is_online, current_world, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON DUPLICATE KEY UPDATE
-                is_online = VALUES(is_online),
-                current_world = VALUES(current_world),
-                updated_at = CURRENT_TIMESTAMP
-            """;
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, playerName);
-            statement.setBoolean(2, online);
-            statement.setString(3, currentWorld);
-            statement.executeUpdate();
-        } catch (SQLException ex) {
-            plugin.getLogger().warning("Fehler beim Aktualisieren der Presence: " + ex.getMessage());
+        JsonObject body = new JsonObject();
+        body.addProperty("playerName", playerName);
+        if (currentWorld == null) {
+            body.add("currentWorld", null);
+        } else {
+            body.addProperty("currentWorld", currentWorld);
+        }
+        body.addProperty("online", online);
+
+        try {
+            ApiResponse response = request("PUT", "/worlds/presence", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("Presence API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Aktualisieren der Presence via API: " + ex.getMessage());
         }
     }
 
     public List<JoinRequest> listPendingJoinRequests(int limit) {
-        String sql = """
-            SELECT id, player_name, world_name
-            FROM worldsgui_join_requests
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
-            LIMIT ?
-            """;
         List<JoinRequest> requests = new ArrayList<>();
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setInt(1, Math.max(1, limit));
-            try (ResultSet rs = statement.executeQuery()) {
-                while (rs.next()) {
-                    requests.add(new JoinRequest(rs.getLong("id"), rs.getString("player_name"), rs.getString("world_name")));
-                }
+        try {
+            String path = "/worlds/join-requests/pending?limit=" + Math.max(1, limit);
+            ApiResponse response = request("GET", path, null);
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("JoinRequest API Fehler: HTTP " + response.statusCode());
+                return requests;
             }
-        } catch (SQLException ex) {
-            plugin.getLogger().warning("Fehler beim Laden der Join-Requests: " + ex.getMessage());
+
+            JsonObject json = parseObject(response.body());
+            JsonArray rows = json.has("requests") && json.get("requests").isJsonArray()
+                ? json.getAsJsonArray("requests")
+                : new JsonArray();
+            for (JsonElement element : rows) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject row = element.getAsJsonObject();
+                requests.add(new JoinRequest(
+                    getLong(row, "id", 0L),
+                    getString(row, "playerName", ""),
+                    getString(row, "worldName", "")
+                ));
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
         }
         return requests;
     }
 
     public void markJoinRequest(long id, String status, String message) {
-        String sql = """
-            UPDATE worldsgui_join_requests
-            SET status = ?,
-                result_message = ?,
-                processed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """;
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, status);
-            statement.setString(2, message);
-            statement.setLong(3, id);
-            statement.executeUpdate();
-        } catch (SQLException ex) {
-            plugin.getLogger().warning("Fehler beim Aktualisieren eines Join-Requests: " + ex.getMessage());
+        JsonObject body = new JsonObject();
+        body.addProperty("status", status);
+        if (message == null) {
+            body.add("message", null);
+        } else {
+            body.addProperty("message", message);
+        }
+        patchOrWarn("/worlds/join-requests/" + id, body);
+    }
+
+    private List<WorldEntry> listWorlds(String path, String label) {
+        List<WorldEntry> entries = new ArrayList<>();
+        try {
+            ApiResponse response = request("GET", path, null);
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("Fehler beim Laden " + label + " via API: HTTP " + response.statusCode());
+                return entries;
+            }
+
+            JsonObject json = parseObject(response.body());
+            JsonArray worlds = json.has("worlds") && json.get("worlds").isJsonArray()
+                ? json.getAsJsonArray("worlds")
+                : new JsonArray();
+            for (JsonElement worldElement : worlds) {
+                if (worldElement.isJsonObject()) {
+                    entries.add(mapEntry(worldElement.getAsJsonObject()));
+                }
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Laden " + label + " via API: " + ex.getMessage());
+        }
+        return entries;
+    }
+
+    private void postOrWarn(String path, JsonObject body) {
+        try {
+            ApiResponse response = request("POST", path, gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("POST " + path + " fehlgeschlagen: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("POST " + path + " fehlgeschlagen: " + ex.getMessage());
         }
     }
 
-    private void updateSingleField(String worldName, String field, Object value) {
-        String sql = "UPDATE worldsgui_worlds SET " + field + " = ? WHERE world_name = ?";
-        try (Connection connection = openConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setObject(1, value);
-            statement.setString(2, worldName);
-            statement.executeUpdate();
-        } catch (SQLException ex) {
-            plugin.getLogger().severe("Fehler beim Aktualisieren von " + field + ": " + ex.getMessage());
+    private void patchOrWarn(String path, JsonObject body) {
+        try {
+            ApiResponse response = request("PATCH", path, gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("PATCH " + path + " fehlgeschlagen: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("PATCH " + path + " fehlgeschlagen: " + ex.getMessage());
         }
     }
 
-    private WorldEntry mapEntry(ResultSet rs) throws SQLException {
+    private ApiResponse request(String method, String path, String jsonBody) throws IOException, InterruptedException {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+            .uri(URI.create(apiBaseUrl + path))
+            .timeout(Duration.ofSeconds(8))
+            .header("Authorization", "Bearer " + apiToken)
+            .header("Accept", "application/json");
+
+        switch (method) {
+            case "GET" -> builder.GET();
+            case "DELETE" -> builder.DELETE();
+            default -> {
+                String payload = jsonBody == null ? "{}" : jsonBody;
+                builder.header("Content-Type", "application/json");
+                builder.method(method, HttpRequest.BodyPublishers.ofString(payload));
+            }
+        }
+
+        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        return new ApiResponse(response.statusCode(), response.body() == null ? "" : response.body());
+    }
+
+    private WorldEntry mapEntry(JsonObject row) {
         return new WorldEntry(
-            rs.getString("world_name"),
-            rs.getString("owner_uuid"),
-            rs.getString("owner_name"),
-            rs.getString("order_label"),
-            splitPlayers(rs.getString("invited_players")),
-            splitPlayers(rs.getString("trusted_players")),
-            rs.getString("display_name"),
-            rs.getString("icon_material"),
-            rs.getBoolean("is_public"),
-            rs.getObject("spawn_x") == null ? null : rs.getDouble("spawn_x"),
-            rs.getObject("spawn_y") == null ? null : rs.getDouble("spawn_y"),
-            rs.getObject("spawn_z") == null ? null : rs.getDouble("spawn_z"),
-            rs.getObject("spawn_yaw") == null ? null : rs.getFloat("spawn_yaw"),
-            rs.getObject("spawn_pitch") == null ? null : rs.getFloat("spawn_pitch")
+            getString(row, "worldName", ""),
+            getString(row, "ownerUuid", ""),
+            getString(row, "ownerName", ""),
+            getNullableString(row, "orderLabel"),
+            getStringList(row, "invitedPlayers"),
+            getStringList(row, "trustedPlayers"),
+            getString(row, "displayName", ""),
+            getString(row, "iconMaterial", "GRASS_BLOCK"),
+            getBoolean(row, "isPublic", true),
+            getNullableDouble(row, "spawnX"),
+            getNullableDouble(row, "spawnY"),
+            getNullableDouble(row, "spawnZ"),
+            getNullableFloat(row, "spawnYaw"),
+            getNullableFloat(row, "spawnPitch")
         );
     }
 
-    private void ensureOrderLabelColumn(Connection connection) {
-        String sql = "ALTER TABLE worldsgui_worlds ADD COLUMN order_label VARCHAR(16) NULL AFTER owner_name";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
-        } catch (SQLException ex) {
-            String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
-            if (!msg.contains("duplicate") && !msg.contains("exists")) {
-                plugin.getLogger().warning("Konnte order_label nicht anlegen: " + ex.getMessage());
-            }
-        }
+    private JsonObject parseObject(String raw) {
+        JsonElement element = gson.fromJson(raw == null || raw.isBlank() ? "{}" : raw, JsonElement.class);
+        return element != null && element.isJsonObject() ? element.getAsJsonObject() : new JsonObject();
     }
 
-    private void ensureInvitedPlayersColumn(Connection connection) {
-        String sql = "ALTER TABLE worldsgui_worlds ADD COLUMN invited_players TEXT NULL AFTER order_label";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
-        } catch (SQLException ex) {
-            String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
-            if (!msg.contains("duplicate") && !msg.contains("exists")) {
-                plugin.getLogger().warning("Konnte invited_players nicht anlegen: " + ex.getMessage());
-            }
+    private List<String> getStringList(JsonObject obj, String key) {
+        List<String> out = new ArrayList<>();
+        if (!obj.has(key) || !obj.get(key).isJsonArray()) {
+            return out;
         }
-    }
-
-    private void ensureTrustedPlayersColumn(Connection connection) {
-        String sql = "ALTER TABLE worldsgui_worlds ADD COLUMN trusted_players TEXT NULL AFTER invited_players";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
-        } catch (SQLException ex) {
-            String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
-            if (!msg.contains("duplicate") && !msg.contains("exists")) {
-                plugin.getLogger().warning("Konnte trusted_players nicht anlegen: " + ex.getMessage());
-            }
-        }
-    }
-
-    private void ensurePlayerPresenceTable(Connection connection) {
-        String sql = """
-            CREATE TABLE IF NOT EXISTS worldsgui_player_presence (
-                player_name VARCHAR(16) PRIMARY KEY,
-                is_online BOOLEAN NOT NULL DEFAULT FALSE,
-                current_world VARCHAR(64) NULL,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_presence_online (is_online)
-            )
-            """;
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
-        } catch (SQLException ex) {
-            plugin.getLogger().warning("Konnte worldsgui_player_presence nicht anlegen: " + ex.getMessage());
-        }
-    }
-
-    private void ensureJoinRequestsTable(Connection connection) {
-        String sql = """
-            CREATE TABLE IF NOT EXISTS worldsgui_join_requests (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                player_name VARCHAR(16) NOT NULL,
-                world_name VARCHAR(64) NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending',
-                result_message VARCHAR(255) NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMP NULL,
-                INDEX idx_join_requests_status_created (status, created_at)
-            )
-            """;
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
-        } catch (SQLException ex) {
-            plugin.getLogger().warning("Konnte worldsgui_join_requests nicht anlegen: " + ex.getMessage());
-        }
-    }
-
-    private List<String> splitPlayers(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return new ArrayList<>();
-        }
-        String[] tokens = raw.split(",");
-        List<String> out = new ArrayList<>(tokens.length);
-        for (String token : tokens) {
-            String trimmed = token.trim();
-            if (!trimmed.isBlank()) {
-                out.add(trimmed);
+        JsonArray arr = obj.getAsJsonArray(key);
+        for (JsonElement item : arr) {
+            if (item.isJsonPrimitive()) {
+                out.add(item.getAsString());
             }
         }
         return out;
     }
 
-    private String joinPlayers(List<String> players) {
-        StringBuilder builder = new StringBuilder();
-        for (String player : players) {
-            if (player == null) {
-                continue;
-            }
-            String trimmed = player.trim();
-            if (trimmed.isBlank()) {
-                continue;
-            }
-            if (!builder.isEmpty()) {
-                builder.append(',');
-            }
-            builder.append(trimmed);
+    private String getString(JsonObject obj, String key, String fallback) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return fallback;
         }
-        return builder.toString();
+        return obj.get(key).getAsString();
     }
 
-    private boolean containsIgnoreCase(List<String> values, String needle) {
-        for (String value : values) {
-            if (value.equalsIgnoreCase(needle)) {
-                return true;
-            }
+    private String getNullableString(JsonObject obj, String key) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return null;
         }
-        return false;
+        return obj.get(key).getAsString();
     }
 
-    private Connection openConnection() throws SQLException {
-        try {
-            Class.forName("org.mariadb.jdbc.Driver");
-        } catch (ClassNotFoundException ex) {
-            throw new SQLException("MariaDB-Treiber nicht gefunden", ex);
+    private boolean getBoolean(JsonObject obj, String key, boolean fallback) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return fallback;
         }
+        return obj.get(key).getAsBoolean();
+    }
 
-        String url = "jdbc:mariadb://" + host + ":" + port + "/" + database + "?useUnicode=true&characterEncoding=utf8";
-        return DriverManager.getConnection(url, username, password);
+    private int getInt(JsonObject obj, String key, int fallback) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return fallback;
+        }
+        return obj.get(key).getAsInt();
+    }
+
+    private long getLong(JsonObject obj, String key, long fallback) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return fallback;
+        }
+        return obj.get(key).getAsLong();
+    }
+
+    private Double getNullableDouble(JsonObject obj, String key) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return null;
+        }
+        return obj.get(key).getAsDouble();
+    }
+
+    private Float getNullableFloat(JsonObject obj, String key) {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            return null;
+        }
+        return obj.get(key).getAsFloat();
+    }
+
+    private String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private String trimTrailingSlash(String value) {
+        if (value == null) {
+            return "";
+        }
+        String out = value.trim();
+        while (out.endsWith("/")) {
+            out = out.substring(0, out.length() - 1);
+        }
+        return out;
+    }
+
+    private record ApiResponse(int statusCode, String body) {
     }
 
     public record JoinRequest(long id, String playerName, String worldName) {

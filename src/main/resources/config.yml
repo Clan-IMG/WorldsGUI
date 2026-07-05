@@ -1,13 +1,6 @@
-mysql:
-  host: "worldsgui-db"
-  port: 3306
-  database: "worldsgui"
-  username: "root"
-  password: "vAlV3cVfDR/PiauDdMlMKkObVZQKMJQhN5XFxYVEMm8="
-
 api:
   # Base URL of api.clan-img.net (without trailing slash)
-  base-url: "https://api.clan-img.net"
+  base-url: "https://worldsgui.clan-img.net"
   # Must match API_TOKEN in the backend environment.
   token: ""
 
