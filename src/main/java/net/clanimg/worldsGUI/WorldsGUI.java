@@ -9,6 +9,7 @@ import net.clanimg.worldsGUI.command.VerifyCommand;
 import net.clanimg.worldsGUI.data.WorldsRepository;
 import net.clanimg.worldsGUI.gui.GuiManager;
 import net.clanimg.worldsGUI.listener.ChatInputListener;
+import net.clanimg.worldsGUI.listener.ConsoleLoginListener;
 import net.clanimg.worldsGUI.listener.InventoryListener;
 import net.clanimg.worldsGUI.listener.PlayerPresenceListener;
 import org.bukkit.Bukkit;
@@ -47,6 +48,7 @@ public final class WorldsGUI extends JavaPlugin {
 
         Bukkit.getPluginManager().registerEvents(new InventoryListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(new ChatInputListener(guiManager), this);
+        Bukkit.getPluginManager().registerEvents(new ConsoleLoginListener(), this);
         Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(repository), this);
 
         joinRequestTask = Bukkit.getScheduler().runTaskTimer(this, this::processJoinRequests, 40L, 40L);
