@@ -319,7 +319,6 @@ public final class GuiManager {
 
         trusted.add(normalizedTarget);
         repository.setTrustedPlayers(worldName, trusted);
-        applyWorldGuardTrust(worldName, normalizedTarget, true);
         player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
     }
 
@@ -353,7 +352,6 @@ public final class GuiManager {
         }
 
         repository.setTrustedPlayers(worldName, trusted);
-        applyWorldGuardTrust(worldName, normalizedTarget, false);
         player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
@@ -578,7 +576,6 @@ public final class GuiManager {
 
         repository.setInvitedPlayers(worldName, invited);
         repository.setTrustedPlayers(worldName, trusted);
-        applyWorldGuardTrust(worldName, normalizedTarget, false);
         player.sendMessage("§aEinladung für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
@@ -624,7 +621,6 @@ public final class GuiManager {
 
         trusted.add(normalizedTarget);
         repository.setTrustedPlayers(worldName, trusted);
-        applyWorldGuardTrust(worldName, normalizedTarget, true);
         player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
     }
 
@@ -664,7 +660,6 @@ public final class GuiManager {
         }
 
         repository.setTrustedPlayers(worldName, trusted);
-        applyWorldGuardTrust(worldName, normalizedTarget, false);
         player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
@@ -1425,29 +1420,6 @@ public final class GuiManager {
         String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
         String full = prefixTemplate.replace("%messages%", raw).replace('&', '§');
         player.sendMessage(full);
-    }
-
-    private void applyWorldGuardTrust(String worldName, String targetPlayer, boolean trusted) {
-        String configKey = trusted ? "worldguard.trust-command" : "worldguard.untrust-command";
-        String template = plugin.getConfig().getString(configKey, "");
-        if (template == null || template.isBlank()) {
-            template = trusted
-                ? "rg addmember global -w %world% %player%"
-                : "rg removemember global -w %world% %player%";
-        }
-
-        String command = template
-            .replace("%world%", worldName)
-            .replace("%player%", targetPlayer)
-            .trim();
-        if (command.isBlank()) {
-            return;
-        }
-
-        boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
-        if (!ok) {
-            plugin.getLogger().warning("WorldGuard command failed: " + command);
-        }
     }
 
     private String normalizePlayerName(String raw) {
