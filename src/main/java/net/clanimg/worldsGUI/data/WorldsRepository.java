@@ -84,7 +84,7 @@ public final class WorldsRepository {
         }
     }
 
-    public void insertWorld(
+    public boolean insertWorld(
         String worldName,
         String ownerUuid,
         String ownerName,
@@ -127,7 +127,17 @@ public final class WorldsRepository {
         body.addProperty("iconMaterial", iconMaterial);
         body.addProperty("isPublic", isPublic);
         body.addProperty("isArchived", isArchived);
-        postOrWarn("/worlds", body);
+        try {
+            ApiResponse response = request("POST", "/worlds", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("POST /worlds fehlgeschlagen: HTTP " + response.statusCode());
+                return false;
+            }
+            return true;
+        } catch (Exception ex) {
+            plugin.getLogger().warning("POST /worlds fehlgeschlagen: " + ex.getMessage());
+            return false;
+        }
     }
 
     public OrderAssignmentCheck checkOrderAssignment(String orderId, String minecraftName) {
@@ -149,6 +159,46 @@ public final class WorldsRepository {
             plugin.getLogger().warning("Fehler beim Prüfen der Auftragsexistenz via API: " + ex.getMessage());
             return new OrderAssignmentCheck(false, false);
         }
+    }
+
+    public List<String> listAssignedOpenOrderIds(String minecraftName) {
+        List<String> orderIds = new ArrayList<>();
+        String needle = minecraftName == null ? "" : minecraftName.trim();
+        if (needle.isBlank()) {
+            return orderIds;
+        }
+
+        try {
+            ApiResponse response = request(
+                resolveOrdersApiBaseUrl(),
+                resolveOrdersApiToken(),
+                "GET",
+                "/orders/assigned-open?minecraftName=" + encode(needle),
+                null
+            );
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("assigned-open API Fehler: HTTP " + response.statusCode());
+                return orderIds;
+            }
+
+            JsonObject json = parseObject(response.body());
+            JsonArray rows = json.has("orderIds") && json.get("orderIds").isJsonArray()
+                ? json.getAsJsonArray("orderIds")
+                : new JsonArray();
+            for (JsonElement element : rows) {
+                if (!element.isJsonPrimitive()) {
+                    continue;
+                }
+                String value = element.getAsString();
+                if (value != null && !value.isBlank()) {
+                    orderIds.add(value.trim());
+                }
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Laden zugewiesener Aufträge via API: " + ex.getMessage());
+        }
+
+        return orderIds;
     }
 
     public void setInvitedPlayers(String worldName, List<String> players) {

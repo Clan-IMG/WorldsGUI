@@ -485,6 +485,10 @@ public final class GuiManager {
         return names;
     }
 
+    public List<String> listOpenTicketOrderIds(Player player) {
+        return repository.listAssignedOpenOrderIds(player.getName());
+    }
+
     public void executeRename(Player player, String[] args) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.RENAME, true)) {
             return;
@@ -1190,18 +1194,16 @@ public final class GuiManager {
 
                 runEntityCleanup(world);
 
-                repository.insertWorld(
-                    worldName,
-                    player.getUniqueId().toString(),
+                persistWorldMetadataWithRetry(
+                    player.getUniqueId(),
                     player.getName(),
+                    worldName,
                     orderLabel,
                     ticketOrderId,
                     sourceType,
-                    null,
                     nextIndex,
-                    worldName,
-                    Material.GRASS_BLOCK.name(),
                     isPublic,
+                    3,
                     false
                 );
 
@@ -1212,6 +1214,74 @@ public final class GuiManager {
                 openMainMenu(player, ViewMode.OWN, 0);
             }
         }.runTaskLater(plugin, 20L);
+    }
+
+    private void persistWorldMetadataWithRetry(
+        UUID playerId,
+        String ownerName,
+        String worldName,
+        String orderLabel,
+        String ticketOrderId,
+        String sourceType,
+        int worldIndex,
+        boolean isPublic,
+        int retriesLeft,
+        boolean wasRetry
+    ) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            boolean persisted = repository.insertWorld(
+                worldName,
+                playerId.toString(),
+                ownerName,
+                orderLabel,
+                ticketOrderId,
+                sourceType,
+                null,
+                worldIndex,
+                worldName,
+                Material.GRASS_BLOCK.name(),
+                isPublic,
+                false
+            );
+
+            if (persisted) {
+                if (wasRetry) {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        Player online = Bukkit.getPlayer(playerId);
+                        if (online != null && online.isOnline()) {
+                            online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");
+                        }
+                    });
+                }
+                return;
+            }
+
+            if (retriesLeft <= 0) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    Player online = Bukkit.getPlayer(playerId);
+                    if (online != null && online.isOnline()) {
+                        online.sendMessage("§eWelt wurde erstellt, aber API war nicht erreichbar. Sie erscheint im Dashboard, sobald die API wieder erreichbar ist.");
+                    }
+                });
+                return;
+            }
+
+            Bukkit.getScheduler().runTaskLater(plugin, () ->
+                persistWorldMetadataWithRetry(
+                    playerId,
+                    ownerName,
+                    worldName,
+                    orderLabel,
+                    ticketOrderId,
+                    sourceType,
+                    worldIndex,
+                    isPublic,
+                    retriesLeft - 1,
+                    true
+                ),
+                20L * 5
+            );
+        });
     }
 
     private void runEntityCleanup(World world) {

@@ -245,12 +245,12 @@ public final class NavCommand implements TabExecutor {
                 return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[1]);
             }
             if (sub.equals("create")) {
-                return List.of("A010");
+                return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[1]);
             }
         }
 
         if (args.length == 3 && args[0].equalsIgnoreCase("join")) {
-            return List.of("<A010>");
+            return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[2]);
         }
 
         if (args.length == 3 && args[0].equalsIgnoreCase("my-world") && args[1].equalsIgnoreCase("delete")) {
@@ -293,7 +293,7 @@ public final class NavCommand implements TabExecutor {
                 return List.of("<material>");
             }
             if (sub.equals("create")) {
-                return List.of("A010");
+                return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[2]);
             }
         }
 
