@@ -404,6 +404,14 @@ public final class WorldsRepository {
         if (profileToken != null && !profileToken.isBlank()) {
             return profileToken;
         }
+        String envToken = System.getenv("API_TOKEN");
+        if (envToken != null && !envToken.isBlank()) {
+            return envToken;
+        }
+        envToken = System.getenv("CLANIMG_API_TOKEN");
+        if (envToken != null && !envToken.isBlank()) {
+            return envToken;
+        }
         return apiToken;
     }
 
