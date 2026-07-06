@@ -83,6 +83,30 @@ public final class GuiManager {
         handleSetSpawn(player);
     }
 
+    public void executeNavTicketCreate(Player player, String orderLabel) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_CREATE, true)) {
+            return;
+        }
+
+        String normalizedOrder = orderLabel == null ? "" : orderLabel.trim().toUpperCase(Locale.ROOT);
+        if (!ORDER_LABEL_PATTERN.matcher(normalizedOrder).matches()) {
+            player.sendMessage("§cUngültige Auftragsnummer. Format: A010");
+            return;
+        }
+
+        if (repository.findByWorldName(normalizedOrder).isPresent()) {
+            player.sendMessage("§cDiese Welt existiert bereits.");
+            return;
+        }
+
+        if (!player.hasPermission(Permissions.ADMIN) && !repository.isOrderAssigned(normalizedOrder, player.getName())) {
+            player.sendMessage("§cDu bist diesem Auftrag nicht zugewiesen.");
+            return;
+        }
+
+        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder);
+    }
+
     public void executeVerify(Player player, String codeRaw) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.VERIFY, true)) {
             return;
@@ -213,6 +237,140 @@ public final class GuiManager {
         handleSetSpawn(player, worldName);
     }
 
+    public void executeNavMyWorldCreate(Player player, String worldName) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CREATE, true)) {
+            return;
+        }
+
+        String normalizedWorld = worldName == null ? "" : worldName.trim();
+        if (!WORLD_NAME_PATTERN.matcher(normalizedWorld).matches()) {
+            player.sendMessage("§cUngültiger Weltname. Erlaubt: 3-32 Zeichen (A-Z, 0-9, _, -)");
+            return;
+        }
+
+        if (repository.findByWorldName(normalizedWorld).isPresent()) {
+            player.sendMessage("§cDiese Welt existiert bereits.");
+            return;
+        }
+
+        createWorld(player, normalizedWorld, null, false, "private", null);
+    }
+
+    public void executeNavMyWorldDelete(Player player, String worldName, boolean confirmed) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_DELETE, true)) {
+            return;
+        }
+        if (!confirmed) {
+            player.sendMessage("§eNutze: /nav my-world delete <world-name> confirm");
+            return;
+        }
+        deleteWorld(player, worldName);
+    }
+
+    public void executeNavMyWorldOpen(Player player, String worldName) {
+        setWorldPublic(player, worldName, true, Permissions.NAV_MY_WORLD_OPEN);
+    }
+
+    public void executeNavMyWorldClosed(Player player, String worldName) {
+        setWorldPublic(player, worldName, false, Permissions.NAV_MY_WORLD_CLOSED);
+    }
+
+    public void executeNavJoinEnable(Player player, String orderLabel) {
+        setWorldPublic(player, orderLabel, true, Permissions.NAV_JOIN_ENABLE);
+    }
+
+    public void executeNavJoinDisable(Player player, String orderLabel) {
+        setWorldPublic(player, orderLabel, false, Permissions.NAV_JOIN_DISABLE);
+    }
+
+    public void executeNavMyWorldTrust(Player player, String worldName, String targetPlayer) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_TRUST, true)) {
+            return;
+        }
+
+        String normalizedTarget = normalizePlayerName(targetPlayer);
+        if (normalizedTarget == null) {
+            player.sendMessage("§cUngültiger Spielername.");
+            return;
+        }
+
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+
+        if (!containsIgnoreCase(entry.invitedPlayers(), normalizedTarget)) {
+            player.sendMessage("§cSpieler ist nicht eingeladen und kann nicht getrusted werden.");
+            return;
+        }
+
+        List<String> trusted = new ArrayList<>(entry.trustedPlayers());
+        if (containsIgnoreCase(trusted, normalizedTarget)) {
+            player.sendMessage("§eSpieler ist bereits getrusted.");
+            return;
+        }
+
+        trusted.add(normalizedTarget);
+        repository.setTrustedPlayers(worldName, trusted);
+        applyWorldGuardTrust(worldName, normalizedTarget, true);
+        player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
+    }
+
+    public void executeNavMyWorldUntrust(Player player, String worldName, String targetPlayer) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_UNTRUST, true)) {
+            return;
+        }
+
+        String normalizedTarget = normalizePlayerName(targetPlayer);
+        if (normalizedTarget == null) {
+            player.sendMessage("§cUngültiger Spielername.");
+            return;
+        }
+
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+
+        List<String> trusted = new ArrayList<>(entry.trustedPlayers());
+        if (!removeIgnoreCase(trusted, normalizedTarget)) {
+            player.sendMessage("§eSpieler hat aktuell keinen Trust-Status.");
+            return;
+        }
+
+        repository.setTrustedPlayers(worldName, trusted);
+        applyWorldGuardTrust(worldName, normalizedTarget, false);
+        player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
+    }
+
+    public void executeNavMyWorldRename(Player player, String worldName, String[] args) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_RENAME, true)) {
+            return;
+        }
+        handleRenameCommand(player, worldName, args);
+    }
+
+    public void executeNavMyWorldIcon(Player player, String worldName, String[] args) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_ICON, true)) {
+            return;
+        }
+        handleIconCommand(player, worldName, args);
+    }
+
     public void executeNavCreate(Player player, String worldName, String orderLabel) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_CREATE, true)) {
             return;
@@ -235,7 +393,7 @@ public final class GuiManager {
             return;
         }
 
-        createWorld(player, normalizedWorld, normalizedOrder);
+        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder);
     }
 
     public void executeNavDelete(Player player, String worldName) {
@@ -260,7 +418,7 @@ public final class GuiManager {
         PendingDeleteConfirmation pending = new PendingDeleteConfirmation(worldName, confirmCode, expiresAt);
         pendingDeleteByPlayer.put(player.getUniqueId(), pending);
 
-        player.sendMessage("§eLöschung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        player.sendMessage("§eArchivierung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             PendingDeleteConfirmation current = pendingDeleteByPlayer.get(player.getUniqueId());
@@ -942,10 +1100,14 @@ public final class GuiManager {
     private void createWorld(Player player) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
         String worldName = player.getName() + "-" + nextIndex;
-        createWorld(player, worldName, null);
+        createWorld(player, worldName, null, false, "private", null);
     }
 
     private void createWorld(Player player, String worldName, String orderLabel) {
+        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel);
+    }
+
+    private void createWorld(Player player, String worldName, String orderLabel, boolean isPublic, String sourceType, String ticketOrderId) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
 
         WorldCreator creator = new WorldCreator(worldName)
@@ -983,10 +1145,14 @@ public final class GuiManager {
                     player.getUniqueId().toString(),
                     player.getName(),
                     orderLabel,
+                    ticketOrderId,
+                    sourceType,
+                    null,
                     nextIndex,
                     worldName,
                     Material.GRASS_BLOCK.name(),
-                    true
+                    isPublic,
+                    false
                 );
 
                 send(player, "create-success", "%world%", worldName);
@@ -1030,15 +1196,7 @@ public final class GuiManager {
             return;
         }
 
-        evacuatePlayersFromWorld(worldName);
-
-        boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv delete " + worldName);
-        if (!ok) {
-            send(player, "delete-failed");
-            return;
-        }
-
-        repository.deleteWorld(worldName);
+        repository.archiveWorld(worldName);
         send(player, "delete-success", "%world%", worldName);
     }
 
@@ -1060,6 +1218,27 @@ public final class GuiManager {
             affected.teleport(destination);
             affected.sendMessage("§eDiese Welt wurde gelöscht. Du wurdest in deine Welt §f" + ownFallback.getName() + " §eteleportiert.");
         }
+    }
+
+    private void setWorldPublic(Player player, String worldName, boolean isPublic, String permission) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, permission, true)) {
+            return;
+        }
+
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+
+        repository.setPublic(worldName, isPublic);
+        send(player, isPublic ? "set-public" : "set-private");
     }
 
     private World resolveOwnFallbackWorld(Player player, String deletingWorldName) {
@@ -1140,11 +1319,17 @@ public final class GuiManager {
 
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text("Owner: " + entry.ownerName(), NamedTextColor.GRAY));
+        if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
+            lore.add(Component.text("Ticket: #" + entry.ticketOrderId(), NamedTextColor.GOLD));
+        }
         if (entry.orderLabel() != null && !entry.orderLabel().isBlank()) {
             lore.add(Component.text("Auftrag: #" + entry.orderLabel(), NamedTextColor.AQUA));
         }
         lore.add(Component.text("Einladungen: " + entry.invitedPlayers().size() + " | Trust: " + entry.trustedPlayers().size(), NamedTextColor.GRAY));
         lore.add(Component.text(entry.isPublic() ? "Status: Öffentlich" : "Status: Privat", entry.isPublic() ? NamedTextColor.GREEN : NamedTextColor.RED));
+        if (entry.isArchived()) {
+            lore.add(Component.text("Status: Archiviert", NamedTextColor.RED));
+        }
         if (mode == ViewMode.INVITED) {
             lore.add(Component.text("Du bist in dieser Welt eingeladen.", NamedTextColor.AQUA));
         }

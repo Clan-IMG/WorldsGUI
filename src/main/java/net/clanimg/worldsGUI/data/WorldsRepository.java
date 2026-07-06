@@ -87,10 +87,14 @@ public final class WorldsRepository {
         String ownerUuid,
         String ownerName,
         String orderLabel,
+        String ticketOrderId,
+        String sourceType,
+        Integer builderUserId,
         int worldIndex,
         String displayName,
         String iconMaterial,
-        boolean isPublic
+        boolean isPublic,
+        boolean isArchived
     ) {
         JsonObject body = new JsonObject();
         body.addProperty("worldName", worldName);
@@ -101,11 +105,48 @@ public final class WorldsRepository {
         } else {
             body.addProperty("orderLabel", orderLabel);
         }
+        if (ticketOrderId == null) {
+            body.add("ticketOrderId", null);
+        } else {
+            body.addProperty("ticketOrderId", ticketOrderId);
+        }
+        if (sourceType == null) {
+            body.add("sourceType", null);
+        } else {
+            body.addProperty("sourceType", sourceType);
+        }
+        if (builderUserId == null) {
+            body.add("builderUserId", null);
+        } else {
+            body.addProperty("builderUserId", builderUserId);
+        }
         body.addProperty("worldIndex", worldIndex);
         body.addProperty("displayName", displayName);
         body.addProperty("iconMaterial", iconMaterial);
         body.addProperty("isPublic", isPublic);
+        body.addProperty("isArchived", isArchived);
         postOrWarn("/worlds", body);
+    }
+
+    public boolean isOrderAssigned(String orderId, String minecraftName) {
+        try {
+            JsonObject body = new JsonObject();
+            body.addProperty("minecraftName", minecraftName);
+            ApiResponse response = request(
+                "GET",
+                "/orders/" + encode(orderId) + "/assignment-check?minecraftName=" + encode(minecraftName),
+                null
+            );
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("assignment-check API Fehler: HTTP " + response.statusCode());
+                return false;
+            }
+            JsonObject json = parseObject(response.body());
+            return getBoolean(json, "assigned", false);
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Prüfen der Auftragszuweisung via API: " + ex.getMessage());
+            return false;
+        }
     }
 
     public void setInvitedPlayers(String worldName, List<String> players) {
@@ -201,6 +242,17 @@ public final class WorldsRepository {
             }
         } catch (Exception ex) {
             plugin.getLogger().warning("Fehler beim Löschen der Welt via API: " + ex.getMessage());
+        }
+    }
+
+    public void archiveWorld(String worldName) {
+        try {
+            ApiResponse response = request("POST", "/worlds/" + encode(worldName) + "/archive", "{}");
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("archiveWorld API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Archivieren der Welt via API: " + ex.getMessage());
         }
     }
 
@@ -339,11 +391,16 @@ public final class WorldsRepository {
             getString(row, "ownerUuid", ""),
             getString(row, "ownerName", ""),
             getNullableString(row, "orderLabel"),
+            getNullableString(row, "ticketOrderId"),
+            getNullableString(row, "sourceType"),
+            row.has("builderUserId") && !row.get("builderUserId").isJsonNull() ? row.get("builderUserId").getAsInt() : null,
             getStringList(row, "invitedPlayers"),
             getStringList(row, "trustedPlayers"),
             getString(row, "displayName", ""),
             getString(row, "iconMaterial", "GRASS_BLOCK"),
             getBoolean(row, "isPublic", true),
+            getBoolean(row, "isArchived", false),
+            getNullableString(row, "archivedAt"),
             getNullableDouble(row, "spawnX"),
             getNullableDouble(row, "spawnY"),
             getNullableDouble(row, "spawnZ"),

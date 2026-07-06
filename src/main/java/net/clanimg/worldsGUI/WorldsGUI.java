@@ -13,6 +13,7 @@ import net.clanimg.worldsGUI.listener.ConsoleLoginListener;
 import net.clanimg.worldsGUI.listener.InventoryListener;
 import net.clanimg.worldsGUI.listener.PlayerPresenceListener;
 import org.bukkit.Bukkit;
+import org.bukkit.command.CommandExecutor;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -21,6 +22,7 @@ public final class WorldsGUI extends JavaPlugin {
     private WorldsRepository repository;
     private GuiManager guiManager;
     private BukkitTask joinRequestTask;
+    private ConsoleLoginListener consoleLoginListener;
 
     @Override
     public void onEnable() {
@@ -46,9 +48,11 @@ public final class WorldsGUI extends JavaPlugin {
 
         guiManager = new GuiManager(this, repository);
 
+        consoleLoginListener = new ConsoleLoginListener();
+
         Bukkit.getPluginManager().registerEvents(new InventoryListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(new ChatInputListener(guiManager), this);
-        Bukkit.getPluginManager().registerEvents(new ConsoleLoginListener(), this);
+        Bukkit.getPluginManager().registerEvents(consoleLoginListener, this);
         Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(repository), this);
 
         joinRequestTask = Bukkit.getScheduler().runTaskTimer(this, this::processJoinRequests, 40L, 40L);
@@ -72,6 +76,35 @@ public final class WorldsGUI extends JavaPlugin {
         }
         if (getCommand("unverify") != null) {
             getCommand("unverify").setExecutor(new UnverifyCommand(guiManager));
+        }
+        if (getCommand("login") != null) {
+            getCommand("login").setExecutor((CommandExecutor) (sender, command, label, args) -> {
+                if (sender instanceof org.bukkit.command.ConsoleCommandSender) {
+                    String targetName = args.length >= 1 ? String.join(" ", args) : "";
+                    String result = consoleLoginListener.activate(targetName);
+                    if (result != null) {
+                        for (String line : result.split("\\n")) {
+                            sender.sendMessage(line);
+                        }
+                    }
+                    return true;
+                }
+                sender.sendMessage("Dieser Befehl ist nur für die Konsole.");
+                return true;
+            });
+        }
+        if (getCommand("exit") != null) {
+            getCommand("exit").setExecutor((sender, command, label, args) -> {
+                if (sender instanceof org.bukkit.command.ConsoleCommandSender) {
+                    String result = consoleLoginListener.deactivate();
+                    if (result != null) {
+                        sender.sendMessage(result);
+                    }
+                    return true;
+                }
+                sender.sendMessage("Dieser Befehl ist nur für die Konsole.");
+                return true;
+            });
         }
     }
 

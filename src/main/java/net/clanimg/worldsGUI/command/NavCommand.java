@@ -32,11 +32,11 @@ public final class NavCommand implements TabExecutor {
         String sub = args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
             case "create" -> {
-                if (args.length < 3) {
-                    player.sendMessage("Usage: /nav create <world> <A010>");
+                if (args.length < 2) {
+                    player.sendMessage("Usage: /nav create <A010>");
                     return true;
                 }
-                guiManager.executeNavCreate(player, args[1], args[2]);
+                guiManager.executeNavTicketCreate(player, args[1]);
                 return true;
             }
             case "delete" -> {
@@ -46,6 +46,96 @@ public final class NavCommand implements TabExecutor {
                 }
                 guiManager.executeNavDelete(player, args[1]);
                 return true;
+            }
+            case "join" -> {
+                if (args.length < 3) {
+                    player.sendMessage("Usage: /nav join <enable|disable> <A010>");
+                    return true;
+                }
+                String joinSub = args[1].toLowerCase(Locale.ROOT);
+                switch (joinSub) {
+                    case "enable" -> guiManager.executeNavJoinEnable(player, args[2]);
+                    case "disable" -> guiManager.executeNavJoinDisable(player, args[2]);
+                    default -> player.sendMessage("Usage: /nav join <enable|disable> <A010>");
+                }
+                return true;
+            }
+            case "my-world" -> {
+                if (args.length < 2) {
+                    player.sendMessage("Usage: /nav my-world <create|delete|open|closed|trust|untrust|rename|icon> ...");
+                    return true;
+                }
+                String myWorldSub = args[1].toLowerCase(Locale.ROOT);
+                switch (myWorldSub) {
+                    case "create" -> {
+                        if (args.length < 3) {
+                            player.sendMessage("Usage: /nav my-world create <new-name>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldCreate(player, args[2]);
+                        return true;
+                    }
+                    case "delete" -> {
+                        if (args.length < 4 || !args[3].equalsIgnoreCase("confirm")) {
+                            player.sendMessage("Usage: /nav my-world delete <world-name> confirm");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldDelete(player, args[2], true);
+                        return true;
+                    }
+                    case "open" -> {
+                        if (args.length < 3) {
+                            player.sendMessage("Usage: /nav my-world open <world-name>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldOpen(player, args[2]);
+                        return true;
+                    }
+                    case "closed" -> {
+                        if (args.length < 3) {
+                            player.sendMessage("Usage: /nav my-world closed <world-name>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldClosed(player, args[2]);
+                        return true;
+                    }
+                    case "trust" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-world trust <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldTrust(player, args[2], args[3]);
+                        return true;
+                    }
+                    case "untrust" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-world untrust <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldUntrust(player, args[2], args[3]);
+                        return true;
+                    }
+                    case "rename" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-world rename <world-name> <new-name>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldRename(player, args[2], slice(args, 3));
+                        return true;
+                    }
+                    case "icon" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-world icon <world-name> <material>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldIcon(player, args[2], new String[] { args[3] });
+                        return true;
+                    }
+                    default -> {
+                        player.sendMessage("Usage: /nav my-world <create|delete|open|closed|trust|untrust|rename|icon> ...");
+                        return true;
+                    }
+                }
             }
             case "confirm" -> {
                 if (args.length < 2) {
@@ -57,19 +147,11 @@ public final class NavCommand implements TabExecutor {
             }
             case "customer" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
+                    player.sendMessage("Usage: /nav customer <remove|trust|untrust> ...");
                     return true;
                 }
                 String customerSub = args[1].toLowerCase(Locale.ROOT);
                 switch (customerSub) {
-                    case "invite" -> {
-                        if (args.length < 4) {
-                            player.sendMessage("Usage: /nav customer invite <world> <player>");
-                            return true;
-                        }
-                        guiManager.executeNavCustomerInvite(player, args[2], args[3]);
-                        return true;
-                    }
                     case "remove" -> {
                         if (args.length < 4) {
                             player.sendMessage("Usage: /nav customer remove <world> <player>");
@@ -95,7 +177,7 @@ public final class NavCommand implements TabExecutor {
                         return true;
                     }
                     default -> {
-                        player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
+                        player.sendMessage("Usage: /nav customer <remove|trust|untrust> ...");
                         return true;
                     }
                 }
@@ -139,11 +221,19 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 1) {
-            return filterPrefix(List.of("create", "delete", "confirm", "customer", "setspawn", "rename", "icon"), args[0]);
+            return filterPrefix(List.of("create", "delete", "join", "my-world", "confirm", "customer", "setspawn", "rename", "icon"), args[0]);
+        }
+
+        if (args.length == 2 && args[0].equalsIgnoreCase("join")) {
+            return filterPrefix(List.of("enable", "disable"), args[1]);
+        }
+
+        if (args.length == 2 && args[0].equalsIgnoreCase("my-world")) {
+            return filterPrefix(List.of("create", "delete", "open", "closed", "trust", "untrust", "rename", "icon"), args[1]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("customer")) {
-            return filterPrefix(List.of("invite", "remove", "trust", "untrust"), args[1]);
+            return filterPrefix(List.of("remove", "trust", "untrust"), args[1]);
         }
 
         if (args.length == 2) {
@@ -155,8 +245,20 @@ public final class NavCommand implements TabExecutor {
                 return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[1]);
             }
             if (sub.equals("create")) {
-                return List.of("<world>");
+                return List.of("A010");
             }
+        }
+
+        if (args.length == 3 && args[0].equalsIgnoreCase("join")) {
+            return List.of("<A010>");
+        }
+
+        if (args.length == 3 && args[0].equalsIgnoreCase("my-world") && args[1].equalsIgnoreCase("delete")) {
+            return List.of("confirm");
+        }
+
+        if (args.length == 3 && args[0].equalsIgnoreCase("my-world") && args[1].equalsIgnoreCase("create")) {
+            return List.of("<new-name>");
         }
 
         if (args[0].equalsIgnoreCase("customer")) {

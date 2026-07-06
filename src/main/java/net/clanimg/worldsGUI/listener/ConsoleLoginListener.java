@@ -14,6 +14,73 @@ import org.bukkit.event.server.ServerCommandEvent;
 public final class ConsoleLoginListener implements Listener {
     private UUID actingPlayerId;
 
+    public String activate(String targetName) {
+        String normalizedName = targetName == null ? "" : targetName.trim();
+        if (normalizedName.isEmpty()) {
+            return "§cUsage: login <player>";
+        }
+
+        Player target = Bukkit.getPlayerExact(normalizedName);
+        if (target == null || !target.isOnline()) {
+            return "§cSpieler nicht online: " + normalizedName;
+        }
+
+        actingPlayerId = target.getUniqueId();
+        return "§aKonsole steuert jetzt Spieler: §f" + target.getName() + "\n§7Alle nächsten Befehle laufen als Spieler. Mit §fexit §7beenden.";
+    }
+
+    public String deactivate() {
+        if (actingPlayerId == null) {
+            return "§eKein aktiver join-Modus.";
+        }
+        actingPlayerId = null;
+        return "§ajoin-Modus beendet. Du bist wieder normale Konsole.";
+    }
+
+    public boolean hasActivePlayer() {
+        return actingPlayerId != null;
+    }
+
+    public String handleConsoleCommand(String rawCommand) {
+        String raw = rawCommand == null ? "" : rawCommand.trim();
+        if (raw.isEmpty()) {
+            return null;
+        }
+
+        String lower = raw.toLowerCase(Locale.ROOT);
+
+        if (lower.equals("exit")) {
+            return deactivate();
+        }
+
+        if (lower.startsWith("join ") || lower.startsWith("login ")) {
+            String targetName;
+            if (lower.startsWith("join ")) {
+                targetName = raw.substring("join ".length()).trim();
+            } else {
+                targetName = raw.substring("login ".length()).trim();
+            }
+            return activate(targetName);
+        }
+
+        if (actingPlayerId == null) {
+            return null;
+        }
+
+        Player actingPlayer = Bukkit.getPlayer(actingPlayerId);
+        if (actingPlayer == null || !actingPlayer.isOnline()) {
+            actingPlayerId = null;
+            return "§cDer ausgewählte Spieler ist offline. join-Modus beendet.";
+        }
+
+        String command = raw.startsWith("/") ? raw.substring(1) : raw;
+        boolean ok = actingPlayer.performCommand(command);
+        if (!ok) {
+            return "§cBefehl konnte als Spieler nicht ausgeführt werden: §f/" + command;
+        }
+        return null;
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onServerCommand(ServerCommandEvent event) {
         CommandSender sender = event.getSender();
@@ -21,66 +88,17 @@ public final class ConsoleLoginListener implements Listener {
             return;
         }
 
-        String raw = event.getCommand() == null ? "" : event.getCommand().trim();
-        if (raw.isEmpty()) {
+        if (event.getCommand() == null || event.getCommand().trim().isEmpty()) {
             return;
         }
 
-        String lower = raw.toLowerCase(Locale.ROOT);
-
-        if (lower.equals("exit")) {
-            event.setCancelled(true);
-            if (actingPlayerId == null) {
-                sender.sendMessage("§eKein aktiver join-Modus.");
-                return;
-            }
-            sender.sendMessage("§ajoin-Modus beendet. Du bist wieder normale Konsole.");
-            actingPlayerId = null;
+        String result = handleConsoleCommand(event.getCommand());
+        if (result == null) {
             return;
         }
-
-        if (lower.startsWith("join ") || lower.startsWith("login ")) {
-            event.setCancelled(true);
-            String targetName;
-            if (lower.startsWith("join ")) {
-                targetName = raw.substring("join ".length()).trim();
-            } else {
-                targetName = raw.substring("login ".length()).trim();
-            }
-            if (targetName.isEmpty()) {
-                sender.sendMessage("§cUsage: join <player>");
-                return;
-            }
-
-            Player target = Bukkit.getPlayerExact(targetName);
-            if (target == null || !target.isOnline()) {
-                sender.sendMessage("§cSpieler nicht online: " + targetName);
-                return;
-            }
-
-            actingPlayerId = target.getUniqueId();
-            sender.sendMessage("§aKonsole steuert jetzt Spieler: §f" + target.getName());
-            sender.sendMessage("§7Alle nächsten Befehle laufen als Spieler. Mit §fexit §7beenden.");
-            return;
-        }
-
-        if (actingPlayerId == null) {
-            return;
-        }
-
-        Player actingPlayer = Bukkit.getPlayer(actingPlayerId);
         event.setCancelled(true);
-
-        if (actingPlayer == null || !actingPlayer.isOnline()) {
-            sender.sendMessage("§cDer ausgewählte Spieler ist offline. join-Modus beendet.");
-            actingPlayerId = null;
-            return;
-        }
-
-        String command = raw.startsWith("/") ? raw.substring(1) : raw;
-        boolean ok = actingPlayer.performCommand(command);
-        if (!ok) {
-            sender.sendMessage("§cBefehl konnte als Spieler nicht ausgeführt werden: §f/" + command);
+        for (String line : result.split("\\n")) {
+            sender.sendMessage(line);
         }
     }
 }

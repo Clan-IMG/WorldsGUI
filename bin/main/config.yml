@@ -1,0 +1,50 @@
+api:
+  # Base URL for worlds endpoints (without trailing slash)
+  base-url: "https://worldsgui.clan-img.net"
+  token: ""
+  # Optional: Base URL for profile/verify endpoints.
+  # Set this to api.clan-img.net if /verify is handled by the main API service.
+  profile-base-url: ""
+  profile-token: ""
+
+worldguard:
+  # Optional command templates for trust/untrust automation.
+  # Placeholders: %world% and %player%
+  # If empty, plugin uses:
+  # trust   -> rg addmember global -w %world% %player%
+  # untrust -> rg removemember global -w %world% %player%
+  trust-command: ""
+  untrust-command: ""
+
+velocity:
+  # Optional command template for network transfer from join requests.
+  # Example: "sendtoworld %player% %world%"
+  # Leave empty to use local Paper teleport fallback.
+  transfer-command: ""
+
+messages:
+  prefix: "&3WorldsGUI &8» &7%messages%"
+  no-permission: "Du hast dazu keine Berechtigung!"
+  world-not-found: "Die Welt wurde nicht gefunden."
+  world-private: "Diese Welt ist privat."
+  world-not-loaded: "Die Welt konnte nicht geladen werden."
+  not-world-owner: "Du bist nicht der Besitzer dieser Welt."
+  no-selected-world: "Keine Welt ausgewählt. Öffne zuerst /nav und gehe in die Welt-Settings."
+  create-success: "Welt &b%world%&7 wurde erstellt."
+  create-failed: "Welt &c%world%&7 konnte nicht erstellt werden."
+  delete-success: "Welt &c%world%&7 wurde gelöscht."
+  delete-failed: "Welt konnte nicht gelöscht werden."
+  delete-confirm: "Shift-Klick auf das Lösch-Item, um die Welt zu löschen."
+  set-public: "Welt wurde auf &aöffentlich&7 gestellt."
+  set-private: "Welt wurde auf &7privat&7 gestellt."
+  rename-prompt: "Schreibe den neuen Anzeigenamen der Welt in den Chat."
+  rename-empty: "Der Anzeigename darf nicht leer sein."
+  rename-too-long: "Der Anzeigename darf maximal 32 Zeichen lang sein."
+  rename-success: "Anzeigename wurde auf &b%name%&7 gesetzt."
+  icon-prompt: "Schreibe ein Item-Material in den Chat, z.B. &bGRASS_BLOCK&7."
+  icon-invalid: "Ungültiges Material. Beispiel: &bGRASS_BLOCK"
+  icon-success: "Welt-Icon wurde auf &b%icon%&7 gesetzt."
+  join-success: "Du bist der Welt &b%world%&7 beigetreten."
+  setspawn-help: "Nutze &b/setspawn&7 in deiner Welt, um den Welt-Spawn zu setzen."
+  setspawn-not-in-world: "Du musst dich in der ausgewählten Welt befinden."
+  setspawn-success: "Spawn dieser Welt wurde gesetzt."
