@@ -33,7 +33,7 @@ public final class NavCommand implements TabExecutor {
         switch (sub) {
             case "create" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav create <A010>");
+                    player.sendMessage("Usage: /nav create <ticketId>");
                     return true;
                 }
                 guiManager.executeNavTicketCreate(player, args[1]);
@@ -49,14 +49,14 @@ public final class NavCommand implements TabExecutor {
             }
             case "join" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav join <enable|disable> <A010>");
+                    player.sendMessage("Usage: /nav join <enable|disable> <ticketId>");
                     return true;
                 }
                 String joinSub = args[1].toLowerCase(Locale.ROOT);
                 switch (joinSub) {
                     case "enable" -> guiManager.executeNavJoinEnable(player, args[2]);
                     case "disable" -> guiManager.executeNavJoinDisable(player, args[2]);
-                    default -> player.sendMessage("Usage: /nav join <enable|disable> <A010>");
+                    default -> player.sendMessage("Usage: /nav join <enable|disable> <ticketId>");
                 }
                 return true;
             }
