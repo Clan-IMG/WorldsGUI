@@ -44,8 +44,8 @@ public final class WorldsGUI extends JavaPlugin {
 
         repository = new WorldsRepository(this, apiBaseUrl, apiToken);
         if (!repository.initialize()) {
-            disablePluginWithReason("API konnte nicht initialisiert werden: " + repository.lastInitializeError());
-            return;
+            getLogger().warning("API konnte nicht initialisiert werden: " + repository.lastInitializeError());
+            getLogger().warning("WorldsGUI bleibt aktiv und versucht die API später erneut zu erreichen.");
         }
 
         guiManager = new GuiManager(this, repository);
