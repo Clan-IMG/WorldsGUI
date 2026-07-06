@@ -96,17 +96,13 @@ public final class GuiManager {
             return;
         }
 
-        if (repository.findByWorldName(normalizedOrder).isPresent()) {
-            player.sendMessage("§cDiese Welt existiert bereits.");
-            return;
-        }
-
-        if (!repository.orderExists(normalizedOrder, player.getName())) {
+        WorldsRepository.OrderAssignmentCheck orderCheck = repository.checkOrderAssignment(normalizedOrder, player.getName());
+        if (!orderCheck.exists()) {
             player.sendMessage("§cDieser Auftrag existiert nicht: §f" + normalizedOrder);
             return;
         }
 
-        if (!player.hasPermission(Permissions.ADMIN) && !repository.isOrderAssigned(normalizedOrder, player.getName())) {
+        if (!player.hasPermission(Permissions.ADMIN) && !orderCheck.assigned()) {
             player.sendMessage("§cDu bist diesem Auftrag nicht zugewiesen.");
             return;
         }

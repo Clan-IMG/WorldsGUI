@@ -27,6 +27,8 @@ public final class WorldsRepository {
     private final Gson gson;
     private String lastInitializeError = "Unbekannter Fehler";
 
+    public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
+
     public WorldsRepository(JavaPlugin plugin, String apiBaseUrl, String apiToken) {
         this.plugin = plugin;
         this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
@@ -128,28 +130,7 @@ public final class WorldsRepository {
         postOrWarn("/worlds", body);
     }
 
-    public boolean isOrderAssigned(String orderId, String minecraftName) {
-        try {
-            ApiResponse response = request(
-                resolveOrdersApiBaseUrl(),
-                resolveOrdersApiToken(),
-                "GET",
-                "/orders/" + encode(orderId) + "/assignment-check?minecraftName=" + encode(minecraftName),
-                null
-            );
-            if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("assignment-check API Fehler: HTTP " + response.statusCode());
-                return false;
-            }
-            JsonObject json = parseObject(response.body());
-            return getBoolean(json, "assigned", false);
-        } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Prüfen der Auftragszuweisung via API: " + ex.getMessage());
-            return false;
-        }
-    }
-
-    public boolean orderExists(String orderId, String minecraftName) {
+    public OrderAssignmentCheck checkOrderAssignment(String orderId, String minecraftName) {
         try {
             ApiResponse response = request(
                 resolveOrdersApiBaseUrl(),
@@ -160,13 +141,13 @@ public final class WorldsRepository {
             );
             if (response.statusCode() / 100 != 2) {
                 plugin.getLogger().warning("order-exists API Fehler: HTTP " + response.statusCode());
-                return false;
+                return new OrderAssignmentCheck(false, false);
             }
             JsonObject json = parseObject(response.body());
-            return getBoolean(json, "exists", false);
+            return new OrderAssignmentCheck(getBoolean(json, "exists", false), getBoolean(json, "assigned", false));
         } catch (Exception ex) {
             plugin.getLogger().warning("Fehler beim Prüfen der Auftragsexistenz via API: " + ex.getMessage());
-            return false;
+            return new OrderAssignmentCheck(false, false);
         }
     }
 
