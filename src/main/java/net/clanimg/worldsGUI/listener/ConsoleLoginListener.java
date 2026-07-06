@@ -39,9 +39,14 @@ public final class ConsoleLoginListener implements Listener {
             return;
         }
 
-        if (lower.startsWith("join ")) {
+        if (lower.startsWith("join ") || lower.startsWith("login ")) {
             event.setCancelled(true);
-            String targetName = raw.substring("join ".length()).trim();
+            String targetName;
+            if (lower.startsWith("join ")) {
+                targetName = raw.substring("join ".length()).trim();
+            } else {
+                targetName = raw.substring("login ".length()).trim();
+            }
             if (targetName.isEmpty()) {
                 sender.sendMessage("§cUsage: join <player>");
                 return;
