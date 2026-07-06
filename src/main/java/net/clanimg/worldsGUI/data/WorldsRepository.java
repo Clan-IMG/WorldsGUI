@@ -375,6 +375,7 @@ public final class WorldsRepository {
             .uri(URI.create(trimTrailingSlash(baseUrl) + path))
             .timeout(Duration.ofSeconds(8))
             .header("Authorization", "Bearer " + token)
+            .header("X-API-Token", token)
             .header("Accept", "application/json");
 
         switch (method) {
