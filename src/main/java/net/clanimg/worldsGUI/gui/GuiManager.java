@@ -2,6 +2,7 @@ package net.clanimg.worldsGUI.gui;
 
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -9,6 +10,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -99,6 +101,11 @@ public final class GuiManager {
             return;
         }
 
+        if (!repository.orderExists(normalizedOrder, player.getName())) {
+            player.sendMessage("§cDieser Auftrag existiert nicht: §f" + normalizedOrder);
+            return;
+        }
+
         if (!player.hasPermission(Permissions.ADMIN) && !repository.isOrderAssigned(normalizedOrder, player.getName())) {
             player.sendMessage("§cDu bist diesem Auftrag nicht zugewiesen.");
             return;
@@ -144,7 +151,7 @@ public final class GuiManager {
                 HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
                 String body = response.body() == null ? "" : response.body();
 
-                if (response.statusCode() / 100 == 2 && body.contains("\"verified\": true")) {
+                if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "verified")) {
                     message = "§aMinecraft-Profil erfolgreich verifiziert.";
                 } else {
                     String error = extractJsonString(body, "error");
@@ -193,7 +200,7 @@ public final class GuiManager {
                 HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
                 String body = response.body() == null ? "" : response.body();
 
-                if (response.statusCode() / 100 == 2 && body.contains("\"ok\": true")) {
+                if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     message = "§aMinecraft-Verifizierung wurde entfernt.";
                 } else {
                     String error = extractJsonString(body, "error");
@@ -1032,11 +1039,11 @@ public final class GuiManager {
 
         if (mode == ViewMode.OWN) {
             inv.setItem(49, namedItem(Material.EMERALD_BLOCK, "§aNeue Welt erstellen"));
-            inv.setItem(50, namedItem(Material.COMPASS, "§bÖffentliche Welten ansehen"));
+            inv.setItem(50, namedItem(Material.COMPASS, "§bTickets ansehen"));
         } else if (mode == ViewMode.PUBLIC) {
             inv.setItem(50, namedItem(Material.COMPASS, "§eMeine Welten ansehen"));
         } else {
-            inv.setItem(50, namedItem(Material.COMPASS, "§bÖffentliche Welten ansehen"));
+            inv.setItem(50, namedItem(Material.COMPASS, "§bTickets ansehen"));
         }
 
         player.openInventory(inv);
@@ -1089,7 +1096,20 @@ public final class GuiManager {
         }
 
         boolean admin = player.hasPermission(Permissions.ADMIN);
-        return repository.listDiscoverableWorlds(player.getUniqueId().toString(), admin);
+        List<WorldEntry> discoverable = repository.listDiscoverableWorlds(player.getUniqueId().toString(), admin);
+        List<WorldEntry> tickets = new ArrayList<>();
+        for (WorldEntry entry : discoverable) {
+            String sourceType = entry.sourceType();
+            if (sourceType != null && sourceType.equalsIgnoreCase("ticket")) {
+                tickets.add(entry);
+                continue;
+            }
+            if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
+                tickets.add(entry);
+            }
+        }
+        tickets.sort(Comparator.comparing(WorldEntry::worldName, String.CASE_INSENSITIVE_ORDER));
+        return tickets;
     }
 
     private void createWorld(Player player) {
@@ -1344,7 +1364,7 @@ public final class GuiManager {
         } else if (mode == ViewMode.INVITED) {
             type = "Eingeladene Welten";
         } else {
-            type = "Öffentliche Welten";
+            type = "Tickets";
         }
         return Component.text(type + " - Seite " + (page + 1), NamedTextColor.DARK_AQUA);
     }
@@ -1371,6 +1391,16 @@ public final class GuiManager {
             return null;
         }
         return json.substring(firstQuote + 1, secondQuote);
+    }
+
+    private boolean jsonBooleanFieldIsTrue(String json, String key) {
+        if (json == null || json.isBlank() || key == null || key.isBlank()) {
+            return false;
+        }
+
+        Pattern pattern = Pattern.compile("\\\"" + Pattern.quote(key) + "\\\"\\s*:\\s*(true|false)", Pattern.CASE_INSENSITIVE);
+        Matcher matcher = pattern.matcher(json);
+        return matcher.find() && "true".equalsIgnoreCase(matcher.group(1));
     }
 
     private ItemStack namedItem(Material material, String name) {

@@ -25,6 +25,18 @@ public final class ConsoleLoginListener implements Listener {
             return "§cSpieler nicht online: " + normalizedName;
         }
 
+        if (actingPlayerId != null) {
+            Player current = Bukkit.getPlayer(actingPlayerId);
+            if (current != null && current.isOnline()) {
+                if (current.getUniqueId().equals(target.getUniqueId())) {
+                    return "§ejoin-Modus ist bereits aktiv für §f" + current.getName() + "§e.";
+                }
+                return "§ejoin-Modus ist bereits aktiv für §f" + current.getName()
+                    + "§e. Nutze zuerst §fexit§e, dann §flogin " + target.getName() + "§e.";
+            }
+            actingPlayerId = null;
+        }
+
         actingPlayerId = target.getUniqueId();
         return "§aKonsole steuert jetzt Spieler: §f" + target.getName() + "\n§7Alle nächsten Befehle laufen als Spieler. Mit §fexit §7beenden.";
     }

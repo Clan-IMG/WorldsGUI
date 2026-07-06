@@ -130,8 +130,6 @@ public final class WorldsRepository {
 
     public boolean isOrderAssigned(String orderId, String minecraftName) {
         try {
-            JsonObject body = new JsonObject();
-            body.addProperty("minecraftName", minecraftName);
             ApiResponse response = request(
                 "GET",
                 "/orders/" + encode(orderId) + "/assignment-check?minecraftName=" + encode(minecraftName),
@@ -145,6 +143,25 @@ public final class WorldsRepository {
             return getBoolean(json, "assigned", false);
         } catch (Exception ex) {
             plugin.getLogger().warning("Fehler beim Prüfen der Auftragszuweisung via API: " + ex.getMessage());
+            return false;
+        }
+    }
+
+    public boolean orderExists(String orderId, String minecraftName) {
+        try {
+            ApiResponse response = request(
+                "GET",
+                "/orders/" + encode(orderId) + "/assignment-check?minecraftName=" + encode(minecraftName),
+                null
+            );
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("order-exists API Fehler: HTTP " + response.statusCode());
+                return false;
+            }
+            JsonObject json = parseObject(response.body());
+            return getBoolean(json, "exists", false);
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Prüfen der Auftragsexistenz via API: " + ex.getMessage());
             return false;
         }
     }
