@@ -287,11 +287,11 @@ public final class GuiManager {
     }
 
     public void executeNavJoinEnable(Player player, String orderLabel) {
-        setWorldPublic(player, orderLabel, true, Permissions.NAV_JOIN_ENABLE);
+        setTicketWorldPublic(player, orderLabel, true, Permissions.NAV_JOIN_ENABLE);
     }
 
     public void executeNavJoinDisable(Player player, String orderLabel) {
-        setWorldPublic(player, orderLabel, false, Permissions.NAV_JOIN_DISABLE);
+        setTicketWorldPublic(player, orderLabel, false, Permissions.NAV_JOIN_DISABLE);
     }
 
     public void executeNavMyWorldTrust(Player player, String worldName, String targetPlayer) {
@@ -1358,6 +1358,32 @@ public final class GuiManager {
         }
 
         repository.setPublic(worldName, isPublic);
+        send(player, isPublic ? "set-public" : "set-private");
+    }
+
+    private void setTicketWorldPublic(Player player, String orderLabel, boolean isPublic, String permission) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, permission, true)) {
+            return;
+        }
+
+        String normalizedOrder = orderLabel == null ? "" : orderLabel.trim().toUpperCase(Locale.ROOT);
+        if (!ORDER_LABEL_PATTERN.matcher(normalizedOrder).matches()) {
+            player.sendMessage("§cUngültige Auftragsnummer. Format: A010");
+            return;
+        }
+
+        Optional<WorldEntry> entryOpt = repository
+            .listOwnWorlds(player.getUniqueId().toString())
+            .stream()
+            .filter(entry -> normalizedOrder.equalsIgnoreCase(entry.ticketOrderId()) || normalizedOrder.equalsIgnoreCase(entry.orderLabel()))
+            .findFirst();
+
+        if (entryOpt.isEmpty()) {
+            player.sendMessage("§cKeine Welt für diesen Auftrag gefunden: §f" + normalizedOrder);
+            return;
+        }
+
+        repository.setPublic(entryOpt.get().worldName(), isPublic);
         send(player, isPublic ? "set-public" : "set-private");
     }
 
