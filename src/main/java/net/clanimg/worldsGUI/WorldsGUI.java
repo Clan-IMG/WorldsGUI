@@ -17,12 +17,14 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class WorldsGUI extends JavaPlugin {
     private WorldsRepository repository;
     private GuiManager guiManager;
     private BukkitTask joinRequestTask;
     private ConsoleLoginListener consoleLoginListener;
+    private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
 
     @Override
     public void onEnable() {
@@ -55,7 +57,7 @@ public final class WorldsGUI extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(consoleLoginListener, this);
         Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(repository), this);
 
-        joinRequestTask = Bukkit.getScheduler().runTaskTimer(this, this::processJoinRequests, 40L, 40L);
+        joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
 
         if (getCommand("nav") != null) {
             NavCommand navCommand = new NavCommand(guiManager);
@@ -120,24 +122,40 @@ public final class WorldsGUI extends JavaPlugin {
     }
 
     private void processJoinRequests() {
-        for (WorldsRepository.JoinRequest request : repository.listPendingJoinRequests(30)) {
-            Player player = Bukkit.getPlayerExact(request.playerName());
-            if (player == null || !player.isOnline()) {
-                repository.markJoinRequest(request.id(), "failed", "Player offline");
-                continue;
-            }
+        if (!joinRequestPollRunning.compareAndSet(false, true)) {
+            return;
+        }
 
-            if (player.getWorld().getName().equalsIgnoreCase(request.worldName())) {
-                repository.markJoinRequest(request.id(), "done", "Already in world");
-                continue;
-            }
+        try {
+            java.util.List<WorldsRepository.JoinRequest> requests = repository.listPendingJoinRequests(30);
+            Bukkit.getScheduler().runTask(this, () -> {
+                try {
+                    for (WorldsRepository.JoinRequest request : requests) {
+                        Player player = Bukkit.getPlayerExact(request.playerName());
+                        if (player == null || !player.isOnline()) {
+                            repository.markJoinRequest(request.id(), "failed", "Player offline");
+                            continue;
+                        }
 
-            boolean ok = guiManager.executeDashboardJoin(player, request.worldName());
-            if (ok) {
-                repository.markJoinRequest(request.id(), "done", "Teleported");
-            } else {
-                repository.markJoinRequest(request.id(), "failed", "Join failed");
-            }
+                        if (player.getWorld().getName().equalsIgnoreCase(request.worldName())) {
+                            repository.markJoinRequest(request.id(), "done", "Already in world");
+                            continue;
+                        }
+
+                        boolean ok = guiManager.executeDashboardJoin(player, request.worldName());
+                        if (ok) {
+                            repository.markJoinRequest(request.id(), "done", "Teleported");
+                        } else {
+                            repository.markJoinRequest(request.id(), "failed", "Join failed");
+                        }
+                    }
+                } finally {
+                    joinRequestPollRunning.set(false);
+                }
+            });
+        } catch (Exception ex) {
+            joinRequestPollRunning.set(false);
+            getLogger().warning("Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
         }
     }
 

@@ -770,11 +770,7 @@ public final class GuiManager {
         }
 
         if (slot == 53) {
-            List<WorldEntry> worlds = listWorldsFor(player, holder.mode());
-            int maxPage = Math.max(0, (int) Math.ceil(worlds.size() / (double) PAGE_SIZE) - 1);
-            if (holder.page() < maxPage) {
-                openMainMenu(player, holder.mode(), holder.page() + 1);
-            }
+            openMainMenu(player, holder.mode(), holder.page() + 1);
             return;
         }
 
@@ -1012,6 +1008,25 @@ public final class GuiManager {
     }
 
     private void openMainMenu(Player player, ViewMode mode, int page) {
+        UUID playerId = player.getUniqueId();
+        String playerUuid = playerId.toString();
+        String playerName = player.getName();
+        boolean admin = player.hasPermission(Permissions.ADMIN);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<WorldEntry> worlds = listWorldsFor(playerUuid, playerName, admin, mode);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player onlinePlayer = Bukkit.getPlayer(playerId);
+                if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                    return;
+                }
+
+                Inventory inv = buildMainMenu(mode, page, worlds);
+                onlinePlayer.openInventory(inv);
+            });
+        });
+    }
+
+    private Inventory buildMainMenu(ViewMode mode, int page, List<WorldEntry> worlds) {
         Inventory inv = Bukkit.createInventory(new MainHolder(mode, page), MAIN_SIZE, titleForMain(mode, page));
 
         ItemStack filler = namedItem(Material.GRAY_STAINED_GLASS_PANE, " ");
@@ -1019,7 +1034,6 @@ public final class GuiManager {
             inv.setItem(slot, filler);
         }
 
-        List<WorldEntry> worlds = listWorldsFor(player, mode);
         int start = page * PAGE_SIZE;
         for (int i = 0; i < PAGE_SIZE; i++) {
             int idx = start + i;
@@ -1049,19 +1063,33 @@ public final class GuiManager {
         } else {
             inv.setItem(50, namedItem(Material.COMPASS, "§bTickets ansehen"));
         }
-
-        player.openInventory(inv);
+        return inv;
     }
 
     private void openSettingsMenu(Player player, String worldName, int returnPage) {
-        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
-        if (entryOpt.isEmpty()) {
-            send(player, "world-not-found");
-            openMainMenu(player, ViewMode.OWN, 0);
-            return;
-        }
-        WorldEntry entry = entryOpt.get();
+        UUID playerId = player.getUniqueId();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player onlinePlayer = Bukkit.getPlayer(playerId);
+                if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                    return;
+                }
 
+                if (entryOpt.isEmpty()) {
+                    send(onlinePlayer, "world-not-found");
+                    openMainMenu(onlinePlayer, ViewMode.OWN, 0);
+                    return;
+                }
+
+                WorldEntry entry = entryOpt.get();
+                Inventory inv = buildSettingsMenu(worldName, returnPage, entry);
+                onlinePlayer.openInventory(inv);
+            });
+        });
+    }
+
+    private Inventory buildSettingsMenu(String worldName, int returnPage, WorldEntry entry) {
         Inventory inv = Bukkit.createInventory(
             new SettingsHolder(worldName, returnPage),
             SETTINGS_SIZE,
@@ -1087,20 +1115,23 @@ public final class GuiManager {
         inv.setItem(14, namedItem(Material.BARRIER, "§cWelt löschen", List.of(Component.text("Shift-Klick zum Löschen mit Multiverse"))));
         inv.setItem(16, namedItem(Material.COMPASS, "§fSpawn setzen", List.of(Component.text("Nutze /setspawn in dieser Welt"))));
 
-        player.openInventory(inv);
+        return inv;
     }
 
     private List<WorldEntry> listWorldsFor(Player player, ViewMode mode) {
+        return listWorldsFor(player.getUniqueId().toString(), player.getName(), player.hasPermission(Permissions.ADMIN), mode);
+    }
+
+    private List<WorldEntry> listWorldsFor(String ownerUuid, String playerName, boolean admin, ViewMode mode) {
         if (mode == ViewMode.OWN) {
-            return repository.listOwnWorlds(player.getUniqueId().toString());
+            return repository.listOwnWorlds(ownerUuid);
         }
 
         if (mode == ViewMode.INVITED) {
-            return repository.listInvitedWorlds(player.getName());
+            return repository.listInvitedWorlds(playerName);
         }
 
-        boolean admin = player.hasPermission(Permissions.ADMIN);
-        List<WorldEntry> discoverable = repository.listDiscoverableWorlds(player.getUniqueId().toString(), admin);
+        List<WorldEntry> discoverable = repository.listDiscoverableWorlds(ownerUuid, admin);
         List<WorldEntry> tickets = new ArrayList<>();
         for (WorldEntry entry : discoverable) {
             String sourceType = entry.sourceType();
