@@ -131,6 +131,8 @@ public final class WorldsRepository {
     public boolean isOrderAssigned(String orderId, String minecraftName) {
         try {
             ApiResponse response = request(
+                resolveOrdersApiBaseUrl(),
+                resolveOrdersApiToken(),
                 "GET",
                 "/orders/" + encode(orderId) + "/assignment-check?minecraftName=" + encode(minecraftName),
                 null
@@ -150,6 +152,8 @@ public final class WorldsRepository {
     public boolean orderExists(String orderId, String minecraftName) {
         try {
             ApiResponse response = request(
+                resolveOrdersApiBaseUrl(),
+                resolveOrdersApiToken(),
                 "GET",
                 "/orders/" + encode(orderId) + "/assignment-check?minecraftName=" + encode(minecraftName),
                 null
@@ -382,10 +386,14 @@ public final class WorldsRepository {
     }
 
     private ApiResponse request(String method, String path, String jsonBody) throws IOException, InterruptedException {
+        return request(apiBaseUrl, apiToken, method, path, jsonBody);
+    }
+
+    private ApiResponse request(String baseUrl, String token, String method, String path, String jsonBody) throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-            .uri(URI.create(apiBaseUrl + path))
+            .uri(URI.create(trimTrailingSlash(baseUrl) + path))
             .timeout(Duration.ofSeconds(8))
-            .header("Authorization", "Bearer " + apiToken)
+            .header("Authorization", "Bearer " + token)
             .header("Accept", "application/json");
 
         switch (method) {
@@ -400,6 +408,22 @@ public final class WorldsRepository {
 
         HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
         return new ApiResponse(response.statusCode(), response.body() == null ? "" : response.body());
+    }
+
+    private String resolveOrdersApiBaseUrl() {
+        String profileBaseUrl = plugin.getConfig().getString("api.profile-base-url", "");
+        if (profileBaseUrl != null && !profileBaseUrl.isBlank()) {
+            return profileBaseUrl;
+        }
+        return apiBaseUrl;
+    }
+
+    private String resolveOrdersApiToken() {
+        String profileToken = plugin.getConfig().getString("api.profile-token", "");
+        if (profileToken != null && !profileToken.isBlank()) {
+            return profileToken;
+        }
+        return apiToken;
     }
 
     private WorldEntry mapEntry(JsonObject row) {
