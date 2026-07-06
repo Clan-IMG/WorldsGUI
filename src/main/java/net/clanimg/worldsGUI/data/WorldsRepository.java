@@ -129,8 +129,15 @@ public final class WorldsRepository {
         body.addProperty("isArchived", isArchived);
         try {
             ApiResponse response = request("POST", "/worlds", gson.toJson(body));
-            if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("POST /worlds fehlgeschlagen: HTTP " + response.statusCode());
+            int status = response.statusCode();
+            if (status / 100 != 2) {
+                if (status == 409) {
+                    // Duplicate/exists can happen on retries and should be treated as idempotent success.
+                    return true;
+                }
+                plugin.getLogger().warning(
+                    "POST /worlds fehlgeschlagen: HTTP " + status + " body=" + abbreviate(response.body(), 280)
+                );
                 return false;
             }
             return true;
@@ -571,6 +578,16 @@ public final class WorldsRepository {
             out = out.substring(0, out.length() - 1);
         }
         return out;
+    }
+
+    private String abbreviate(String value, int maxLen) {
+        if (value == null) {
+            return "";
+        }
+        if (value.length() <= maxLen) {
+            return value;
+        }
+        return value.substring(0, Math.max(0, maxLen - 3)) + "...";
     }
 
     private record ApiResponse(int statusCode, String body) {
