@@ -215,6 +215,10 @@ public final class WorldsRepository {
         return listWorlds("/worlds/ticket/" + encode(orderId), "ticket worlds");
     }
 
+    public List<WorldEntry> listOpenTicketWorlds() {
+        return listWorlds("/worlds/tickets/open", "open ticket worlds");
+    }
+
     public List<WorldEntry> listArchivedWorlds() {
         return listWorlds("/worlds/archived", "archived worlds");
     }

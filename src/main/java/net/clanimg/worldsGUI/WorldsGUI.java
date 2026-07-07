@@ -194,9 +194,7 @@ public final class WorldsGUI extends JavaPlugin {
             return;
         }
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            guiManager.syncAssignedTicketWorlds(player);
-        }
+        guiManager.syncOpenTicketWorlds();
     }
 
     private void disablePluginWithReason(String reason) {

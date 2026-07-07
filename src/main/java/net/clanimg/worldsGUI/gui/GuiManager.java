@@ -173,6 +173,84 @@ public final class GuiManager {
         });
     }
 
+    public void syncOpenTicketWorlds() {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<WorldEntry> openTicketWorlds = repository.listOpenTicketWorlds();
+            if (openTicketWorlds.isEmpty()) {
+                return;
+            }
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                for (WorldEntry entry : openTicketWorlds) {
+                    if (Bukkit.getWorld(entry.worldName()) != null) {
+                        continue;
+                    }
+                    createTicketWorldFromMetadata(entry);
+                }
+            });
+        });
+    }
+
+    private void createTicketWorldFromMetadata(WorldEntry entry) {
+        String worldName = entry.worldName();
+        String ownerUuid = entry.ownerUuid();
+        String ownerName = entry.ownerName();
+        List<String> customers = entry.customers() == null || entry.customers().isEmpty()
+            ? repository.getOrderSummary(entry.ticketOrderId())
+                .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
+                    ? List.<String>of()
+                    : List.of(summary.customerName().trim()))
+                .orElse(List.of())
+            : entry.customers();
+        int worldIndex = repository.nextWorldIndex(ownerUuid);
+
+        WorldCreator creator = new WorldCreator(worldName)
+            .environment(World.Environment.NORMAL)
+            .type(WorldType.FLAT)
+            .generateStructures(false)
+            .generatorSettings("{\"biome\":\"minecraft:plains\",\"features\":false,\"lakes\":false,\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:dirt\",\"height\":100},{\"block\":\"minecraft:grass_block\",\"height\":1}]}");
+
+        World created = Bukkit.createWorld(creator);
+        if (created == null) {
+            plugin.getLogger().warning("Ticket-Welt konnte nicht erstellt werden: " + worldName);
+            return;
+        }
+
+        ConsoleCommandSender console = Bukkit.getConsoleSender();
+        Bukkit.dispatchCommand(console, "mv import " + worldName + " normal");
+
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                World world = Bukkit.getWorld(worldName);
+                if (world == null) {
+                    plugin.getLogger().warning("Ticket-Welt konnte nach dem Import nicht geladen werden: " + worldName);
+                    return;
+                }
+
+                setAnyGameRule(world, false, "spawn_mobs", "doMobSpawning");
+                setAnyGameRule(world, false, "advance_weather", "weather_cycle", "doWeatherCycle");
+                setAnyGameRule(world, false, "advance_time", "daylight_cycle", "doDaylightCycle");
+
+                runEntityCleanup(world);
+
+                persistWorldMetadataWithRetry(
+                    UUID.fromString(ownerUuid),
+                    ownerName,
+                    worldName,
+                    entry.orderLabel(),
+                    entry.ticketOrderId(),
+                    "ticket",
+                    customers,
+                    worldIndex,
+                    false,
+                    3,
+                    false
+                );
+            }
+        }.runTaskLater(plugin, 20L);
+    }
+
     public void executeVerify(Player player, String codeRaw) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.VERIFY, true)) {
             return;
