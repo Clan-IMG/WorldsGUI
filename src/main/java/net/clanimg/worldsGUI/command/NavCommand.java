@@ -19,8 +19,15 @@ public final class NavCommand implements TabExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!(sender instanceof Player player)) {
-            sender.sendMessage("Dieser Befehl ist nur für Spieler.");
+        Player player = sender instanceof Player p ? p : null;
+
+        if (player == null) {
+            if (args.length >= 1 && args[0].equalsIgnoreCase("status")) {
+                String worldName = args.length >= 2 ? args[1] : "";
+                guiManager.executeNavStatus(sender, worldName);
+                return true;
+            }
+            sender.sendMessage("Dieser Befehl ist nur für Spieler (außer /nav status).");
             return true;
         }
 
@@ -187,6 +194,11 @@ public final class NavCommand implements TabExecutor {
                 guiManager.executeNavSetSpawn(player, worldName);
                 return true;
             }
+            case "status" -> {
+                String worldName = args.length >= 2 ? args[1] : "";
+                guiManager.executeNavStatus(player, worldName);
+                return true;
+            }
             case "rename" -> {
                 if (args.length < 3) {
                     player.sendMessage("Usage: /nav rename <world> <name>");
@@ -221,7 +233,7 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 1) {
-            return filterPrefix(List.of("create", "delete", "join", "my-world", "confirm", "customer", "setspawn", "rename", "icon"), args[0]);
+            return filterPrefix(List.of("create", "delete", "join", "my-world", "confirm", "customer", "setspawn", "status", "rename", "icon"), args[0]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("join")) {
@@ -241,7 +253,7 @@ public final class NavCommand implements TabExecutor {
             if (sub.equals("confirm")) {
                 return List.of("<code>");
             }
-            if (sub.equals("setspawn") || sub.equals("rename") || sub.equals("icon") || sub.equals("delete")) {
+            if (sub.equals("setspawn") || sub.equals("status") || sub.equals("rename") || sub.equals("icon") || sub.equals("delete")) {
                 return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[1]);
             }
             if (sub.equals("create")) {

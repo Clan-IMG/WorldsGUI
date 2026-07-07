@@ -33,6 +33,7 @@ import org.bukkit.World;
 import org.bukkit.WorldCreator;
 import org.bukkit.WorldType;
 import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
@@ -387,6 +388,47 @@ public final class GuiManager {
             return;
         }
         handleSetSpawn(player, worldName);
+    }
+
+    public void executeNavStatus(CommandSender sender, String worldNameArg) {
+        String worldName = worldNameArg == null ? "" : worldNameArg.trim();
+
+        if (sender instanceof Player player) {
+            if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_STATUS, true)) {
+                return;
+            }
+            if (worldName.isBlank()) {
+                worldName = player.getWorld().getName();
+            }
+        } else if (sender instanceof ConsoleCommandSender) {
+            if (worldName.isBlank()) {
+                sender.sendMessage("Usage: /nav status <world>");
+                return;
+            }
+        }
+
+        if (worldName.isBlank()) {
+            sender.sendMessage("Usage: /nav status <world>");
+            return;
+        }
+
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            sender.sendMessage("§cWelt nicht gefunden: §f" + worldName);
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        String lifecycle = entry.isArchived() ? "archiviert" : "aktiv";
+        String visibility = entry.isPublic() ? "oeffentlich" : "privat";
+        String sourceType = (entry.sourceType() == null || entry.sourceType().isBlank()) ? "-" : entry.sourceType();
+        String ticketOrderId = (entry.ticketOrderId() == null || entry.ticketOrderId().isBlank()) ? "-" : entry.ticketOrderId();
+
+        sender.sendMessage("§7[WorldsGUI] Status fuer Welt §f" + entry.worldName());
+        sender.sendMessage("§7- lifecycle: §f" + lifecycle);
+        sender.sendMessage("§7- visibility: §f" + visibility);
+        sender.sendMessage("§7- sourceType: §f" + sourceType);
+        sender.sendMessage("§7- ticketOrderId: §f" + ticketOrderId);
     }
 
     public void executeNavMyWorldCreate(Player player, String worldName) {
