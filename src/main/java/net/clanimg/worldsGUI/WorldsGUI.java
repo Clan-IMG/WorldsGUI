@@ -19,6 +19,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class WorldsGUI extends JavaPlugin {
@@ -36,6 +37,8 @@ public final class WorldsGUI extends JavaPlugin {
 
         String apiBaseUrl = getConfig().getString("api.base-url", "");
         String apiToken = getConfig().getString("api.token", "");
+        int connectTimeoutSeconds = Math.max(3, getConfig().getInt("api.connect-timeout-seconds", 10));
+        int requestTimeoutSeconds = Math.max(5, getConfig().getInt("api.request-timeout-seconds", 20));
 
         if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
             disablePluginWithReason("API base-url ist leer oder fehlt in config.yml (api.base-url).");
@@ -46,7 +49,13 @@ public final class WorldsGUI extends JavaPlugin {
             return;
         }
 
-        repository = new WorldsRepository(this, apiBaseUrl, apiToken);
+        repository = new WorldsRepository(
+            this,
+            apiBaseUrl,
+            apiToken,
+            Duration.ofSeconds(connectTimeoutSeconds),
+            Duration.ofSeconds(requestTimeoutSeconds)
+        );
         if (!repository.initialize()) {
             getLogger().warning("API konnte nicht initialisiert werden: " + repository.lastInitializeError());
             getLogger().warning("WorldsGUI bleibt aktiv und versucht die API später erneut zu erreichen.");

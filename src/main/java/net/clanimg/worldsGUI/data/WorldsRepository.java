@@ -24,18 +24,26 @@ public final class WorldsRepository {
     private final String apiBaseUrl;
     private final String apiToken;
     private final HttpClient httpClient;
+    private final Duration requestTimeout;
     private final Gson gson;
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
     public record OrderSummary(String orderId, String customerName) {}
 
-    public WorldsRepository(JavaPlugin plugin, String apiBaseUrl, String apiToken) {
+    public WorldsRepository(
+        JavaPlugin plugin,
+        String apiBaseUrl,
+        String apiToken,
+        Duration connectTimeout,
+        Duration requestTimeout
+    ) {
         this.plugin = plugin;
         this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
         this.apiToken = apiToken;
+        this.requestTimeout = requestTimeout;
         this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(6))
+            .connectTimeout(connectTimeout)
             .build();
         this.gson = new Gson();
     }
@@ -496,7 +504,7 @@ public final class WorldsRepository {
     private ApiResponse request(String baseUrl, String token, String method, String path, String jsonBody) throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
             .uri(URI.create(trimTrailingSlash(baseUrl) + path))
-            .timeout(Duration.ofSeconds(8))
+            .timeout(requestTimeout)
             .header("Authorization", "Bearer " + token)
             .header("X-API-Token", token)
             .header("Accept", "application/json");

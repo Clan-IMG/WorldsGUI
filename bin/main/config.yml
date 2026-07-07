@@ -2,6 +2,9 @@ api:
   # Base URL for worlds endpoints (without trailing slash)
   base-url: "https://worldsgui.clan-img.net"
   token: ""
+  # HTTP timeout settings for API calls from the Minecraft server.
+  connect-timeout-seconds: 10
+  request-timeout-seconds: 20
   # Optional: Base URL for profile/verify endpoints.
   # Set this to api.clan-img.net if /verify is handled by the main API service.
   profile-base-url: ""
