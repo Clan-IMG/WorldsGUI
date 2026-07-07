@@ -45,10 +45,10 @@ commands:
 permissions:
   worldsgui.use:
     description: Allgemeiner Zugriff auf WorldsGUI
-    default: true
+    default: op
   worldsgui.command.nav:
     description: Erlaubt /nav
-    default: true
+    default: op
   worldsgui.command.nav.create:
     description: Erlaubt /nav create
     default: op
@@ -72,31 +72,31 @@ permissions:
     default: op
   worldsgui.command.nav.setspawn:
     description: Erlaubt /nav setspawn
-    default: true
+    default: op
   worldsgui.command.nav.status:
     description: Erlaubt /nav status
-    default: true
+    default: op
   worldsgui.command.nav.rename:
     description: Erlaubt /nav rename
-    default: true
+    default: op
   worldsgui.command.nav.icon:
     description: Erlaubt /nav icon
-    default: true
+    default: op
   worldsgui.command.setspawn:
     description: Erlaubt /setspawn
-    default: true
+    default: op
   worldsgui.command.rename:
     description: Erlaubt /rename
-    default: true
+    default: op
   worldsgui.command.icon:
     description: Erlaubt /icon
-    default: true
+    default: op
   worldsgui.command.verify:
     description: Erlaubt /verify
-    default: true
+    default: op
   worldsgui.command.unverify:
     description: Erlaubt /unverify
-    default: true
+    default: op
   worldsgui.admin:
     description: Sieht private Welten in der Compass-Ansicht und darf sie betreten
     default: op

@@ -35,3 +35,9 @@ messages:
   setspawn-help: "Nutze &b/setspawn&7 in deiner Welt, um den Welt-Spawn zu setzen."
   setspawn-not-in-world: "Du musst dich in der ausgewählten Welt befinden."
   setspawn-success: "Spawn dieser Welt wurde gesetzt."
+
+  no-prefix:
+    active-ticket:
+      - "<b><gradient:#734892:#2F9CBA>Clan IMG</gradient></b> &8» &7Du hast ein aktives Ticket."
+      - "&7Klicke hier, um die Welt zu betreten: &b%world_link% &8(&7%world%&8)"
+    # no-permission: "Du hast dazu keine Berechtigung!"

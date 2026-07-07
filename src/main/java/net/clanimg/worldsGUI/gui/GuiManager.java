@@ -21,6 +21,7 @@ import net.clanimg.worldsGUI.WorldsGUI;
 import net.clanimg.worldsGUI.data.WorldsRepository;
 import net.clanimg.worldsGUI.model.WorldEntry;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -51,6 +52,32 @@ public final class GuiManager {
     private static final int PAGE_SIZE = 36;
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
+    private static final Pattern LEGACY_CODE_PATTERN = Pattern.compile("(?i)[&§]([0-9A-FK-OR])");
+
+    private static final Map<Character, String> LEGACY_TO_MINI = Map.ofEntries(
+        Map.entry('0', "<black>"),
+        Map.entry('1', "<dark_blue>"),
+        Map.entry('2', "<dark_green>"),
+        Map.entry('3', "<dark_aqua>"),
+        Map.entry('4', "<dark_red>"),
+        Map.entry('5', "<dark_purple>"),
+        Map.entry('6', "<gold>"),
+        Map.entry('7', "<gray>"),
+        Map.entry('8', "<dark_gray>"),
+        Map.entry('9', "<blue>"),
+        Map.entry('a', "<green>"),
+        Map.entry('b', "<aqua>"),
+        Map.entry('c', "<red>"),
+        Map.entry('d', "<light_purple>"),
+        Map.entry('e', "<yellow>"),
+        Map.entry('f', "<white>"),
+        Map.entry('k', "<obfuscated>"),
+        Map.entry('l', "<bold>"),
+        Map.entry('m', "<strikethrough>"),
+        Map.entry('n', "<underlined>"),
+        Map.entry('o', "<italic>"),
+        Map.entry('r', "<reset>")
+    );
 
     private final WorldsGUI plugin;
     private final WorldsRepository repository;
@@ -891,6 +918,42 @@ public final class GuiManager {
 
     public boolean executeDashboardJoin(Player player, String worldName) {
         return joinWorld(player, worldName, false);
+    }
+
+    public void notifyCustomerActiveTicketOnJoin(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        String playerName = player.getName();
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Optional<WorldEntry> match = repository
+                .listOpenTicketWorlds()
+                .stream()
+                .filter(entry -> entry.customers() != null && containsIgnoreCase(entry.customers(), playerName))
+                .findFirst();
+
+            if (match.isEmpty()) {
+                return;
+            }
+
+            String worldName = match.get().worldName();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+
+                sendNoPrefix(
+                    online,
+                    "active-ticket",
+                    "%world%", worldName,
+                    "%world_link%", "/nav"
+                );
+            });
+        });
     }
 
     public void handleInventoryClick(InventoryClickEvent event) {
@@ -1817,13 +1880,73 @@ public final class GuiManager {
     }
 
     private void send(Player player, String key, String... replacements) {
-        String raw = plugin.getConfig().getString("messages." + key, key);
-        for (int i = 0; i + 1 < replacements.length; i += 2) {
-            raw = raw.replace(replacements[i], replacements[i + 1]);
-        }
         String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
-        String full = prefixTemplate.replace("%messages%", raw).replace('&', '§');
-        player.sendMessage(full);
+        for (String line : readMessageLines("messages." + key, key, replacements)) {
+            String full = prefixTemplate.replace("%messages%", line);
+            player.sendMessage(parseFormattedMessage(full));
+        }
+    }
+
+    private void sendNoPrefix(Player player, String key, String... replacements) {
+        String noPrefixPath = "messages.no-prefix." + key;
+        String fallbackPath = "messages." + key;
+        for (String line : readMessageLines(noPrefixPath, fallbackPath, key, replacements)) {
+            player.sendMessage(parseFormattedMessage(line));
+        }
+    }
+
+    private List<String> readMessageLines(String path, String fallbackKey, String... replacements) {
+        return readMessageLines(path, "messages." + fallbackKey, fallbackKey, replacements);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> readMessageLines(String path, String fallbackPath, String fallbackLiteral, String... replacements) {
+        Object value = plugin.getConfig().get(path);
+        if (value == null) {
+            value = plugin.getConfig().get(fallbackPath);
+        }
+
+        List<String> lines = new ArrayList<>();
+        if (value instanceof List<?> listValue) {
+            for (Object raw : listValue) {
+                if (raw != null) {
+                    lines.add(raw.toString());
+                }
+            }
+        } else if (value instanceof String raw) {
+            lines.add(raw);
+        }
+
+        if (lines.isEmpty()) {
+            lines.add(fallbackLiteral);
+        }
+
+        List<String> out = new ArrayList<>(lines.size());
+        for (String line : lines) {
+            String formatted = line;
+            for (int i = 0; i + 1 < replacements.length; i += 2) {
+                formatted = formatted.replace(replacements[i], replacements[i + 1]);
+            }
+            out.add(formatted);
+        }
+        return out;
+    }
+
+    private Component parseFormattedMessage(String input) {
+        String mini = legacyToMiniMessage(input);
+        return MiniMessage.miniMessage().deserialize(mini);
+    }
+
+    private String legacyToMiniMessage(String input) {
+        Matcher matcher = LEGACY_CODE_PATTERN.matcher(input);
+        StringBuffer out = new StringBuffer();
+        while (matcher.find()) {
+            char code = Character.toLowerCase(matcher.group(1).charAt(0));
+            String replacement = LEGACY_TO_MINI.getOrDefault(code, "");
+            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(out);
+        return out.toString();
     }
 
     private String normalizePlayerName(String raw) {

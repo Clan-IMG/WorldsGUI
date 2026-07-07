@@ -68,7 +68,7 @@ public final class WorldsGUI extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(new InventoryListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(new ChatInputListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(consoleLoginListener, this);
-        Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(this, repository), this);
+        Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(this, repository, guiManager), this);
 
         joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
         presenceRefreshTask = Bukkit.getScheduler().runTaskTimer(this, this::refreshOnlinePresence, 20L, 20L * 20L);
