@@ -33,15 +33,18 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.WorldCreator;
 import org.bukkit.WorldType;
+import org.bukkit.GameMode;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -275,7 +278,8 @@ public final class GuiManager {
                     worldIndex,
                     false,
                     3,
-                    false
+                        false,
+                        false
                 );
             }
         }.runTaskLater(plugin, 20L);
@@ -1276,7 +1280,7 @@ public final class GuiManager {
         String playerName = player.getName();
         boolean admin = player.hasPermission(Permissions.ADMIN);
 
-        player.openInventory(buildMainMenu(player.hasPermission(Permissions.ADMIN), mode, page, List.of(), true));
+        player.openInventory(buildMainMenu(player.hasPermission(Permissions.ADMIN), mode, page, List.of(), true, player.getWorld().getName()));
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<WorldEntry> worlds = listWorldsFor(playerUuid, playerName, admin, mode);
@@ -1291,12 +1295,12 @@ public final class GuiManager {
                     return;
                 }
 
-                onlinePlayer.openInventory(buildMainMenu(onlinePlayer.hasPermission(Permissions.ADMIN), mode, page, worlds, false));
+                onlinePlayer.openInventory(buildMainMenu(onlinePlayer.hasPermission(Permissions.ADMIN), mode, page, worlds, false, onlinePlayer.getWorld().getName()));
             });
         });
     }
 
-    private Inventory buildMainMenu(boolean admin, ViewMode mode, int page, List<WorldEntry> worlds, boolean loading) {
+    private Inventory buildMainMenu(boolean admin, ViewMode mode, int page, List<WorldEntry> worlds, boolean loading, String currentWorldName) {
         Inventory inv = Bukkit.createInventory(new MainHolder(mode, page), MAIN_SIZE, titleForMain(mode, page));
 
         ItemStack filler = namedItem(Material.GRAY_STAINED_GLASS_PANE, " ");
@@ -1314,7 +1318,7 @@ public final class GuiManager {
                     break;
                 }
                 WorldEntry entry = worlds.get(idx);
-                inv.setItem(i, worldIcon(entry, mode));
+                inv.setItem(i, worldIcon(entry, mode, currentWorldName));
             }
         }
 
@@ -1467,7 +1471,7 @@ public final class GuiManager {
                     return;
                 }
 
-                createWorld(player, holder.worldName(), null, false, "private", null, List.of(), holder.voidWorld(), holder.chunkyEnabled());
+                createWorld(player, holder.worldName(), null, false, "private", null, List.of(), holder.voidWorld(), holder.chunkyEnabled(), true);
             }
             default -> {
             }
@@ -1528,11 +1532,11 @@ public final class GuiManager {
     private void createWorld(Player player) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
         String worldName = player.getName() + "-" + nextIndex;
-        createWorld(player, worldName, null, false, "private", null, List.of(), false, false);
+        createWorld(player, worldName, null, false, "private", null, List.of(), false, false, true);
     }
 
     private void createWorld(Player player, String worldName, String orderLabel) {
-        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel, List.of(), false, false);
+        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel, List.of(), false, false, true);
     }
 
     private void createWorld(
@@ -1544,7 +1548,7 @@ public final class GuiManager {
         String ticketOrderId,
         List<String> customers
     ) {
-        createWorld(player, worldName, orderLabel, isPublic, sourceType, ticketOrderId, customers, false, false);
+        createWorld(player, worldName, orderLabel, isPublic, sourceType, ticketOrderId, customers, false, false, true);
     }
 
     private void createWorld(
@@ -1556,7 +1560,8 @@ public final class GuiManager {
         String ticketOrderId,
         List<String> customers,
         boolean voidWorld,
-        boolean chunkyEnabled
+        boolean chunkyEnabled,
+        boolean notifyWhenVisible
     ) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
 
@@ -1604,7 +1609,8 @@ public final class GuiManager {
                     nextIndex,
                     isPublic,
                     3,
-                    false
+                    false,
+                    notifyWhenVisible
                 );
 
                 send(player, "create-success", "%world%", worldName);
@@ -1617,7 +1623,10 @@ public final class GuiManager {
                 if (chunkyEnabled) {
                     player.sendMessage("§aChunky-Vorgenerierung für diese Welt wurde gestartet.");
                 }
-                openMainMenu(player, ViewMode.OWN, 0);
+                if (notifyWhenVisible) {
+                    player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst teleportiert, sobald sie dort sichtbar ist.");
+                    openMainMenu(player, ViewMode.OWN, 0);
+                }
             }
         }.runTaskLater(plugin, 20L);
     }
@@ -1675,7 +1684,8 @@ public final class GuiManager {
         int worldIndex,
         boolean isPublic,
         int retriesLeft,
-        boolean wasRetry
+        boolean wasRetry,
+        boolean notifyWhenVisible
     ) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             boolean persisted = repository.insertWorld(
@@ -1695,11 +1705,19 @@ public final class GuiManager {
             );
 
             if (persisted) {
-                if (wasRetry) {
+                if (wasRetry || notifyWhenVisible) {
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         Player online = Bukkit.getPlayer(playerId);
                         if (online != null && online.isOnline()) {
-                            online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");
+                            if (notifyWhenVisible) {
+                                online.sendMessage("§aDeine Welt §f" + worldName + " §aist jetzt im GUI sichtbar.");
+                                openMainMenu(online, ViewMode.OWN, 0);
+                                joinWorld(online, worldName, false);
+                                online.sendMessage("§aDu wurdest automatisch in deine neue Welt teleportiert.");
+                            }
+                            if (wasRetry) {
+                                online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");
+                            }
                         }
                     });
                 }
@@ -1728,7 +1746,8 @@ public final class GuiManager {
                     worldIndex,
                     isPublic,
                     retriesLeft - 1,
-                    true
+                    true,
+                    notifyWhenVisible
                 ),
                 20L * 5
             );
@@ -1888,10 +1907,43 @@ public final class GuiManager {
 
         Location spawn = entry.toSpawnLocation(world).orElse(world.getSpawnLocation());
         player.teleport(spawn);
+        applyPreferredGameMode(player, entry);
         if (notify) {
             send(player, "join-success", "%world%", worldName);
         }
         return true;
+    }
+
+    private void applyPreferredGameMode(Player player, WorldEntry entry) {
+        GameMode preferred = resolvePreferredGameMode(player, entry);
+        player.setGameMode(preferred);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (player.isOnline()) {
+                player.setGameMode(preferred);
+            }
+        }, 1L);
+    }
+
+    private GameMode resolvePreferredGameMode(Player player, WorldEntry entry) {
+        if (player.hasPermission(Permissions.ADMIN)) {
+            return GameMode.CREATIVE;
+        }
+
+        String orderId = null;
+        if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
+            orderId = entry.ticketOrderId().trim().toUpperCase(Locale.ROOT);
+        } else if (entry.orderLabel() != null && !entry.orderLabel().isBlank()) {
+            orderId = entry.orderLabel().trim().toUpperCase(Locale.ROOT);
+        }
+
+        if (orderId != null && ORDER_LABEL_PATTERN.matcher(orderId).matches()) {
+            WorldsRepository.OrderAssignmentCheck orderCheck = repository.checkOrderAssignment(orderId, player.getName());
+            if (orderCheck.assigned()) {
+                return GameMode.CREATIVE;
+            }
+        }
+
+        return GameMode.SURVIVAL;
     }
 
     private String resolveContextWorld(Player player) {
@@ -1908,13 +1960,18 @@ public final class GuiManager {
         return null;
     }
 
-    private ItemStack worldIcon(WorldEntry entry, ViewMode mode) {
+    private ItemStack worldIcon(WorldEntry entry, ViewMode mode, String currentWorldName) {
         Material material = Material.matchMaterial(entry.iconMaterial());
         if (material == null || !material.isItem()) {
             material = Material.GRASS_BLOCK;
         }
 
+        boolean isCurrentWorld = currentWorldName != null && currentWorldName.equalsIgnoreCase(entry.worldName());
+
         List<Component> lore = new ArrayList<>();
+        if (isCurrentWorld) {
+            lore.add(Component.text("Du befindest dich gerade in dieser Welt.", NamedTextColor.GREEN));
+        }
         lore.add(Component.text("Owner: " + entry.ownerName(), NamedTextColor.GRAY));
         if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
             lore.add(Component.text("Ticket: #" + entry.ticketOrderId(), NamedTextColor.GOLD));
@@ -1939,7 +1996,7 @@ public final class GuiManager {
             lore.add(Component.text("Rechtsklick: Einstellungen", NamedTextColor.YELLOW));
         }
 
-        return namedWorldItem(material, "§b" + entry.displayName(), entry.worldName(), lore);
+        return namedWorldItem(material, "§b" + entry.displayName(), entry.worldName(), lore, isCurrentWorld);
     }
 
     private Component titleForMain(ViewMode mode, int page) {
@@ -2005,11 +2062,15 @@ public final class GuiManager {
         return item;
     }
 
-    private ItemStack namedWorldItem(Material material, String name, String worldName, List<Component> lore) {
+    private ItemStack namedWorldItem(Material material, String name, String worldName, List<Component> lore, boolean glowing) {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(legacy(name));
         meta.lore(lore);
+        if (glowing) {
+            meta.addEnchant(Enchantment.UNBREAKING, 1, true);
+            meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+        }
         meta.getPersistentDataContainer().set(worldKey, PersistentDataType.STRING, worldName);
         item.setItemMeta(meta);
         return item;
