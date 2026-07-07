@@ -26,6 +26,7 @@ public final class WorldsGUI extends JavaPlugin {
     private GuiManager guiManager;
     private BukkitTask joinRequestTask;
     private BukkitTask presenceRefreshTask;
+    private BukkitTask ticketSyncTask;
     private ConsoleLoginListener consoleLoginListener;
     private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
 
@@ -62,6 +63,7 @@ public final class WorldsGUI extends JavaPlugin {
 
         joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
         presenceRefreshTask = Bukkit.getScheduler().runTaskTimer(this, this::refreshOnlinePresence, 20L, 20L * 20L);
+        ticketSyncTask = Bukkit.getScheduler().runTaskTimer(this, this::syncTicketWorlds, 20L * 10L, 20L * 30L);
 
         if (getCommand("nav") != null) {
             NavCommand navCommand = new NavCommand(guiManager);
@@ -124,6 +126,10 @@ public final class WorldsGUI extends JavaPlugin {
             presenceRefreshTask.cancel();
             presenceRefreshTask = null;
         }
+        if (ticketSyncTask != null) {
+            ticketSyncTask.cancel();
+            ticketSyncTask = null;
+        }
         if (guiManager != null) {
             guiManager.shutdown();
         }
@@ -180,6 +186,16 @@ public final class WorldsGUI extends JavaPlugin {
         } catch (Exception ex) {
             joinRequestPollRunning.set(false);
             getLogger().warning("Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
+        }
+    }
+
+    private void syncTicketWorlds() {
+        if (guiManager == null) {
+            return;
+        }
+
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            guiManager.syncAssignedTicketWorlds(player);
         }
     }
 

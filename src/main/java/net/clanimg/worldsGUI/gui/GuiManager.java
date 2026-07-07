@@ -76,6 +76,7 @@ public final class GuiManager {
             return;
         }
         openMainMenu(player, ViewMode.OWN, 0);
+        syncAssignedTicketWorlds(player);
     }
 
     public void executeSetSpawn(Player player) {
@@ -107,7 +108,70 @@ public final class GuiManager {
             return;
         }
 
-        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder);
+        List<String> customers = repository.getOrderSummary(normalizedOrder)
+            .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
+                ? List.<String>of()
+                : List.of(summary.customerName().trim()))
+            .orElse(List.of());
+
+        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder, customers);
+    }
+
+    public void syncAssignedTicketWorlds(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+        if (!hasPermission(player, Permissions.USE, false) || !hasPermission(player, Permissions.NAV_CREATE, false)) {
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        String playerName = player.getName();
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<String> orderIds = repository.listAssignedOpenOrderIds(playerName);
+            List<PendingTicketWorld> worldsToCreate = new ArrayList<>();
+
+            for (String orderId : orderIds) {
+                Optional<WorldEntry> existing = repository.findByWorldName(orderId);
+                if (existing.isPresent()) {
+                    if (existing.get().isArchived()) {
+                        repository.unarchiveWorld(orderId);
+                    }
+                    continue;
+                }
+
+                List<String> customers = repository.getOrderSummary(orderId)
+                    .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
+                        ? List.<String>of()
+                        : List.of(summary.customerName().trim()))
+                    .orElse(List.of());
+                worldsToCreate.add(new PendingTicketWorld(orderId, customers));
+            }
+
+            if (worldsToCreate.isEmpty()) {
+                return;
+            }
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player onlinePlayer = Bukkit.getPlayer(playerId);
+                if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                    return;
+                }
+
+                for (PendingTicketWorld world : worldsToCreate) {
+                    createWorld(
+                        onlinePlayer,
+                        world.worldName(),
+                        world.worldName(),
+                        false,
+                        "ticket",
+                        world.worldName(),
+                        world.customers()
+                    );
+                }
+            });
+        });
     }
 
     public void executeVerify(Player player, String codeRaw) {
@@ -264,7 +328,7 @@ public final class GuiManager {
             return;
         }
 
-        createWorld(player, normalizedWorld, null, false, "private", null);
+        createWorld(player, normalizedWorld, null, false, "private", null, List.of());
     }
 
     public void executeNavMyWorldDelete(Player player, String worldName, boolean confirmed) {
@@ -402,7 +466,7 @@ public final class GuiManager {
             return;
         }
 
-        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder);
+        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder, List.of());
     }
 
     public void executeNavDelete(Player player, String worldName) {
@@ -797,6 +861,11 @@ public final class GuiManager {
             return;
         }
 
+        if (slot == 51 && holder.mode() == ViewMode.OWN && player.hasPermission(Permissions.ADMIN)) {
+            openMainMenu(player, ViewMode.ARCHIVED, 0);
+            return;
+        }
+
         if (slot > 35) {
             return;
         }
@@ -1017,7 +1086,7 @@ public final class GuiManager {
         String playerName = player.getName();
         boolean admin = player.hasPermission(Permissions.ADMIN);
 
-        player.openInventory(buildMainMenu(mode, page, List.of(), true));
+        player.openInventory(buildMainMenu(player.hasPermission(Permissions.ADMIN), mode, page, List.of(), true));
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<WorldEntry> worlds = listWorldsFor(playerUuid, playerName, admin, mode);
@@ -1032,12 +1101,12 @@ public final class GuiManager {
                     return;
                 }
 
-                onlinePlayer.openInventory(buildMainMenu(mode, page, worlds, false));
+                onlinePlayer.openInventory(buildMainMenu(onlinePlayer.hasPermission(Permissions.ADMIN), mode, page, worlds, false));
             });
         });
     }
 
-    private Inventory buildMainMenu(ViewMode mode, int page, List<WorldEntry> worlds, boolean loading) {
+    private Inventory buildMainMenu(boolean admin, ViewMode mode, int page, List<WorldEntry> worlds, boolean loading) {
         Inventory inv = Bukkit.createInventory(new MainHolder(mode, page), MAIN_SIZE, titleForMain(mode, page));
 
         ItemStack filler = namedItem(Material.GRAY_STAINED_GLASS_PANE, " ");
@@ -1073,8 +1142,13 @@ public final class GuiManager {
         if (mode == ViewMode.OWN) {
             inv.setItem(49, namedItem(Material.EMERALD_BLOCK, "§aNeue Welt erstellen"));
             inv.setItem(50, namedItem(Material.COMPASS, "§bTickets ansehen"));
+            if (admin) {
+                inv.setItem(51, namedItem(Material.DIAMOND, "§cArchivierte Tickets"));
+            }
         } else if (mode == ViewMode.PUBLIC) {
             inv.setItem(50, namedItem(Material.COMPASS, "§eMeine Welten ansehen"));
+        } else if (mode == ViewMode.ARCHIVED) {
+            inv.setItem(50, namedItem(Material.COMPASS, "§bTickets ansehen"));
         } else {
             inv.setItem(50, namedItem(Material.COMPASS, "§bTickets ansehen"));
         }
@@ -1149,6 +1223,10 @@ public final class GuiManager {
             return repository.listInvitedWorlds(playerName);
         }
 
+        if (mode == ViewMode.ARCHIVED) {
+            return admin ? repository.listArchivedWorlds() : List.of();
+        }
+
         Map<String, WorldEntry> ticketWorlds = new ConcurrentHashMap<>();
         for (WorldEntry entry : repository.listOwnWorlds(ownerUuid)) {
             if (isTicketWorld(entry)) {
@@ -1183,14 +1261,22 @@ public final class GuiManager {
     private void createWorld(Player player) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
         String worldName = player.getName() + "-" + nextIndex;
-        createWorld(player, worldName, null, false, "private", null);
+        createWorld(player, worldName, null, false, "private", null, List.of());
     }
 
     private void createWorld(Player player, String worldName, String orderLabel) {
-        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel);
+        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel, List.of());
     }
 
-    private void createWorld(Player player, String worldName, String orderLabel, boolean isPublic, String sourceType, String ticketOrderId) {
+    private void createWorld(
+        Player player,
+        String worldName,
+        String orderLabel,
+        boolean isPublic,
+        String sourceType,
+        String ticketOrderId,
+        List<String> customers
+    ) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
 
         WorldCreator creator = new WorldCreator(worldName)
@@ -1230,6 +1316,7 @@ public final class GuiManager {
                     orderLabel,
                     ticketOrderId,
                     sourceType,
+                    customers,
                     nextIndex,
                     isPublic,
                     3,
@@ -1252,6 +1339,7 @@ public final class GuiManager {
         String orderLabel,
         String ticketOrderId,
         String sourceType,
+        List<String> customers,
         int worldIndex,
         boolean isPublic,
         int retriesLeft,
@@ -1266,6 +1354,7 @@ public final class GuiManager {
                 ticketOrderId,
                 sourceType,
                 null,
+                customers,
                 worldIndex,
                 worldName,
                 Material.GRASS_BLOCK.name(),
@@ -1303,6 +1392,7 @@ public final class GuiManager {
                     orderLabel,
                     ticketOrderId,
                     sourceType,
+                    customers,
                     worldIndex,
                     isPublic,
                     retriesLeft - 1,
@@ -1500,6 +1590,9 @@ public final class GuiManager {
         if (entry.orderLabel() != null && !entry.orderLabel().isBlank()) {
             lore.add(Component.text("Auftrag: #" + entry.orderLabel(), NamedTextColor.AQUA));
         }
+        if (entry.customers() != null && !entry.customers().isEmpty()) {
+            lore.add(Component.text("Kunden: " + String.join(", ", entry.customers()), NamedTextColor.LIGHT_PURPLE));
+        }
         lore.add(Component.text("Einladungen: " + entry.invitedPlayers().size() + " | Trust: " + entry.trustedPlayers().size(), NamedTextColor.GRAY));
         lore.add(Component.text(entry.isPublic() ? "Status: Öffentlich" : "Status: Privat", entry.isPublic() ? NamedTextColor.GREEN : NamedTextColor.RED));
         if (entry.isArchived()) {
@@ -1523,6 +1616,8 @@ public final class GuiManager {
             type = "Meine Welten";
         } else if (mode == ViewMode.INVITED) {
             type = "Eingeladene Welten";
+        } else if (mode == ViewMode.ARCHIVED) {
+            type = "Archivierte Tickets";
         } else {
             type = "Tickets";
         }
@@ -1748,5 +1843,8 @@ public final class GuiManager {
     }
 
     private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs) {
+    }
+
+    private record PendingTicketWorld(String worldName, List<String> customers) {
     }
 }

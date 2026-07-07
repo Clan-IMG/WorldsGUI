@@ -13,6 +13,7 @@ public record WorldEntry(
     String ticketOrderId,
     String sourceType,
     Integer builderUserId,
+    List<String> customers,
     List<String> invitedPlayers,
     List<String> trustedPlayers,
     String displayName,

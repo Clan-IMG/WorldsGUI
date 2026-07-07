@@ -28,6 +28,7 @@ public final class WorldsRepository {
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
+    public record OrderSummary(String orderId, String customerName) {}
 
     public WorldsRepository(JavaPlugin plugin, String apiBaseUrl, String apiToken) {
         this.plugin = plugin;
@@ -92,6 +93,7 @@ public final class WorldsRepository {
         String ticketOrderId,
         String sourceType,
         Integer builderUserId,
+        List<String> customers,
         int worldIndex,
         String displayName,
         String iconMaterial,
@@ -122,6 +124,13 @@ public final class WorldsRepository {
         } else {
             body.addProperty("builderUserId", builderUserId);
         }
+        JsonArray customerValues = new JsonArray();
+        for (String customer : customers == null ? List.<String>of() : customers) {
+            if (customer != null && !customer.isBlank()) {
+                customerValues.add(customer.trim());
+            }
+        }
+        body.add("customers", customerValues);
         body.addProperty("worldIndex", worldIndex);
         body.addProperty("displayName", displayName);
         body.addProperty("iconMaterial", iconMaterial);
@@ -166,6 +175,48 @@ public final class WorldsRepository {
             plugin.getLogger().warning("Fehler beim Prüfen der Auftragsexistenz via API: " + ex.getMessage());
             return new OrderAssignmentCheck(false, false);
         }
+    }
+
+    public Optional<OrderSummary> getOrderSummary(String orderId) {
+        String normalized = orderId == null ? "" : orderId.trim();
+        if (normalized.isBlank()) {
+            return Optional.empty();
+        }
+
+        try {
+            ApiResponse response = request(
+                resolveOrdersApiBaseUrl(),
+                resolveOrdersApiToken(),
+                "GET",
+                "/orders/" + encode(normalized),
+                null
+            );
+            if (response.statusCode() == 404) {
+                return Optional.empty();
+            }
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("order summary API Fehler: HTTP " + response.statusCode());
+                return Optional.empty();
+            }
+
+            JsonObject json = parseObject(response.body());
+            JsonObject order = json.has("order") && json.get("order").isJsonObject()
+                ? json.getAsJsonObject("order")
+                : json;
+            String customerName = getString(order, "mcName", "");
+            return Optional.of(new OrderSummary(normalized, customerName));
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Laden der Auftragsdaten via API: " + ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public List<WorldEntry> listTicketWorlds(String orderId) {
+        return listWorlds("/worlds/ticket/" + encode(orderId), "ticket worlds");
+    }
+
+    public List<WorldEntry> listArchivedWorlds() {
+        return listWorlds("/worlds/archived", "archived worlds");
     }
 
     public List<String> listAssignedOpenOrderIds(String minecraftName) {
@@ -312,6 +363,17 @@ public final class WorldsRepository {
             }
         } catch (Exception ex) {
             plugin.getLogger().warning("Fehler beim Archivieren der Welt via API: " + ex.getMessage());
+        }
+    }
+
+    public void unarchiveWorld(String worldName) {
+        try {
+            ApiResponse response = request("POST", "/worlds/" + encode(worldName) + "/unarchive", "{}");
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("unarchiveWorld API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Fehler beim Entarchivieren der Welt via API: " + ex.getMessage());
         }
     }
 
@@ -482,6 +544,7 @@ public final class WorldsRepository {
             getNullableString(row, "ticketOrderId"),
             getNullableString(row, "sourceType"),
             row.has("builderUserId") && !row.get("builderUserId").isJsonNull() ? row.get("builderUserId").getAsInt() : null,
+            getStringList(row, "customers"),
             getStringList(row, "invitedPlayers"),
             getStringList(row, "trustedPlayers"),
             getString(row, "displayName", ""),
