@@ -17,12 +17,15 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class WorldsGUI extends JavaPlugin {
     private WorldsRepository repository;
     private GuiManager guiManager;
     private BukkitTask joinRequestTask;
+    private BukkitTask presenceRefreshTask;
     private ConsoleLoginListener consoleLoginListener;
     private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
 
@@ -55,9 +58,10 @@ public final class WorldsGUI extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(new InventoryListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(new ChatInputListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(consoleLoginListener, this);
-        Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(repository), this);
+        Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(this, repository), this);
 
         joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
+        presenceRefreshTask = Bukkit.getScheduler().runTaskTimer(this, this::refreshOnlinePresence, 20L, 20L * 20L);
 
         if (getCommand("nav") != null) {
             NavCommand navCommand = new NavCommand(guiManager);
@@ -116,9 +120,29 @@ public final class WorldsGUI extends JavaPlugin {
             joinRequestTask.cancel();
             joinRequestTask = null;
         }
+        if (presenceRefreshTask != null) {
+            presenceRefreshTask.cancel();
+            presenceRefreshTask = null;
+        }
         if (guiManager != null) {
             guiManager.shutdown();
         }
+    }
+
+    private void refreshOnlinePresence() {
+        List<PresenceSnapshot> snapshots = new ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            snapshots.add(new PresenceSnapshot(player.getName(), player.getWorld().getName()));
+        }
+        if (snapshots.isEmpty()) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            for (PresenceSnapshot snapshot : snapshots) {
+                repository.upsertPlayerPresence(snapshot.playerName(), snapshot.worldName(), true);
+            }
+        });
     }
 
     private void processJoinRequests() {
@@ -163,5 +187,8 @@ public final class WorldsGUI extends JavaPlugin {
         getLogger().severe(reason);
         getLogger().severe("WorldsGUI wird deaktiviert.");
         Bukkit.getPluginManager().disablePlugin(this);
+    }
+
+    private record PresenceSnapshot(String playerName, String worldName) {
     }
 }

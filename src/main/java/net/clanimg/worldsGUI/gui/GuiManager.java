@@ -1016,6 +1016,9 @@ public final class GuiManager {
         String playerUuid = playerId.toString();
         String playerName = player.getName();
         boolean admin = player.hasPermission(Permissions.ADMIN);
+
+        player.openInventory(buildMainMenu(mode, page, List.of(), true));
+
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<WorldEntry> worlds = listWorldsFor(playerUuid, playerName, admin, mode);
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -1024,13 +1027,17 @@ public final class GuiManager {
                     return;
                 }
 
-                Inventory inv = buildMainMenu(mode, page, worlds);
-                onlinePlayer.openInventory(inv);
+                InventoryHolder holder = onlinePlayer.getOpenInventory().getTopInventory().getHolder();
+                if (!(holder instanceof MainHolder mainHolder) || mainHolder.mode() != mode || mainHolder.page() != page) {
+                    return;
+                }
+
+                onlinePlayer.openInventory(buildMainMenu(mode, page, worlds, false));
             });
         });
     }
 
-    private Inventory buildMainMenu(ViewMode mode, int page, List<WorldEntry> worlds) {
+    private Inventory buildMainMenu(ViewMode mode, int page, List<WorldEntry> worlds, boolean loading) {
         Inventory inv = Bukkit.createInventory(new MainHolder(mode, page), MAIN_SIZE, titleForMain(mode, page));
 
         ItemStack filler = namedItem(Material.GRAY_STAINED_GLASS_PANE, " ");
@@ -1038,14 +1045,18 @@ public final class GuiManager {
             inv.setItem(slot, filler);
         }
 
-        int start = page * PAGE_SIZE;
-        for (int i = 0; i < PAGE_SIZE; i++) {
-            int idx = start + i;
-            if (idx >= worlds.size()) {
-                break;
+        if (loading) {
+            inv.setItem(22, namedItem(Material.CLOCK, "§eLade Welten ..."));
+        } else {
+            int start = page * PAGE_SIZE;
+            for (int i = 0; i < PAGE_SIZE; i++) {
+                int idx = start + i;
+                if (idx >= worlds.size()) {
+                    break;
+                }
+                WorldEntry entry = worlds.get(idx);
+                inv.setItem(i, worldIcon(entry, mode));
             }
-            WorldEntry entry = worlds.get(idx);
-            inv.setItem(i, worldIcon(entry, mode));
         }
 
         if (page > 0) {
@@ -1128,27 +1139,45 @@ public final class GuiManager {
 
     private List<WorldEntry> listWorldsFor(String ownerUuid, String playerName, boolean admin, ViewMode mode) {
         if (mode == ViewMode.OWN) {
-            return repository.listOwnWorlds(ownerUuid);
+            return repository.listOwnWorlds(ownerUuid)
+                .stream()
+                .filter(entry -> !isTicketWorld(entry))
+                .toList();
         }
 
         if (mode == ViewMode.INVITED) {
             return repository.listInvitedWorlds(playerName);
         }
 
-        List<WorldEntry> discoverable = repository.listDiscoverableWorlds(ownerUuid, admin);
-        List<WorldEntry> tickets = new ArrayList<>();
-        for (WorldEntry entry : discoverable) {
-            String sourceType = entry.sourceType();
-            if (sourceType != null && sourceType.equalsIgnoreCase("ticket")) {
-                tickets.add(entry);
-                continue;
-            }
-            if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
-                tickets.add(entry);
+        Map<String, WorldEntry> ticketWorlds = new ConcurrentHashMap<>();
+        for (WorldEntry entry : repository.listOwnWorlds(ownerUuid)) {
+            if (isTicketWorld(entry)) {
+                ticketWorlds.put(entry.worldName().toLowerCase(Locale.ROOT), entry);
             }
         }
+
+        List<WorldEntry> discoverable = repository.listDiscoverableWorlds(ownerUuid, admin);
+        for (WorldEntry entry : discoverable) {
+            if (isTicketWorld(entry)) {
+                ticketWorlds.putIfAbsent(entry.worldName().toLowerCase(Locale.ROOT), entry);
+            }
+        }
+
+        List<WorldEntry> tickets = new ArrayList<>(ticketWorlds.values());
         tickets.sort(Comparator.comparing(WorldEntry::worldName, String.CASE_INSENSITIVE_ORDER));
         return tickets;
+    }
+
+    private boolean isTicketWorld(WorldEntry entry) {
+        String sourceType = entry.sourceType();
+        if (sourceType != null && sourceType.equalsIgnoreCase("ticket")) {
+            return true;
+        }
+        if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
+            return true;
+        }
+        return entry.orderLabel() != null
+            && ORDER_LABEL_PATTERN.matcher(entry.orderLabel().trim().toUpperCase(Locale.ROOT)).matches();
     }
 
     private void createWorld(Player player) {
