@@ -49,10 +49,12 @@ import org.bukkit.scheduler.BukkitRunnable;
 public final class GuiManager {
     private static final int MAIN_SIZE = 54;
     private static final int SETTINGS_SIZE = 36;
+    private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
     private static final Pattern LEGACY_CODE_PATTERN = Pattern.compile("(?i)[&§]([0-9A-FK-OR])");
+    private static final String FLAT_WORLD_GENERATOR_SETTINGS = "{\"biome\":\"minecraft:plains\",\"features\":false,\"lakes\":false,\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:dirt\",\"height\":64},{\"block\":\"minecraft:grass_block\",\"height\":1}]}";
 
     private static final Map<Character, String> LEGACY_TO_MINI = Map.ofEntries(
         Map.entry('0', "<black>"),
@@ -980,6 +982,12 @@ public final class GuiManager {
             return;
         }
 
+        if (holder instanceof CreateOptionsHolder createOptionsHolder) {
+            event.setCancelled(true);
+            handleCreateOptionsClick(player, event, createOptionsHolder);
+            return;
+        }
+
         if (holder instanceof IconSelectorHolder selectorHolder) {
             event.setCancelled(true);
             handleIconSelectorClick(player, event, selectorHolder);
@@ -1028,7 +1036,7 @@ public final class GuiManager {
             if (holder.mode() != ViewMode.OWN) {
                 return;
             }
-            createWorld(player);
+            openCreateOptionsMenu(player, holder.page());
             return;
         }
 
@@ -1389,6 +1397,83 @@ public final class GuiManager {
         return inv;
     }
 
+    private void openCreateOptionsMenu(Player player, int returnPage) {
+        int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
+        String worldName = player.getName() + "-" + nextIndex;
+        openCreateOptionsMenu(player, worldName, returnPage, false, false);
+    }
+
+    private void openCreateOptionsMenu(Player player, String worldName, int returnPage, boolean voidWorld, boolean chunkyEnabled) {
+        Inventory inv = Bukkit.createInventory(
+            new CreateOptionsHolder(worldName, returnPage, voidWorld, chunkyEnabled),
+            CREATE_OPTIONS_SIZE,
+            Component.text("Neue Welt erstellen", NamedTextColor.DARK_AQUA)
+        );
+
+        ItemStack filler = namedItem(Material.GRAY_STAINED_GLASS_PANE, " ");
+        for (int slot = 0; slot < CREATE_OPTIONS_SIZE; slot++) {
+            inv.setItem(slot, filler);
+        }
+
+        inv.setItem(
+            4,
+            namedItem(
+                Material.PAPER,
+                "§fWeltname: §b" + worldName,
+                List.of(Component.text("Die Welt wird direkt mit diesem Namen erstellt."))
+            )
+        );
+
+        inv.setItem(
+            11,
+            voidWorld
+                ? namedItem(Material.BARRIER, "§cVoid", List.of(Component.text("Klicke für Flatworld")))
+                : namedItem(Material.GRASS_BLOCK, "§aFlatworld", List.of(Component.text("Klicke für Void")))
+        );
+
+        inv.setItem(
+            13,
+            namedItem(
+                Material.EMERALD_BLOCK,
+                "§aWelt jetzt erstellen",
+                List.of(Component.text("Template: " + (voidWorld ? "Void" : "Flatworld")), Component.text("Chunky: " + (chunkyEnabled ? "Aktiv" : "Deaktiviert")))
+            )
+        );
+
+        inv.setItem(
+            15,
+            chunkyEnabled
+                ? namedItem(Material.LIME_WOOL, "§aChunky aktiv", List.of(Component.text("Radius: 2500 Blöcke um den Spawn"), Component.text("Klicke zum Deaktivieren")))
+                : namedItem(Material.RED_WOOL, "§cChunky deaktiviert", List.of(Component.text("Standard: aus"), Component.text("Klicke zum Aktivieren")))
+        );
+
+        inv.setItem(22, namedItem(Material.SPRUCE_DOOR, "§fZurück"));
+        player.openInventory(inv);
+    }
+
+    private void handleCreateOptionsClick(Player player, InventoryClickEvent event, CreateOptionsHolder holder) {
+        int slot = event.getRawSlot();
+        if (slot < 0 || slot >= CREATE_OPTIONS_SIZE) {
+            return;
+        }
+
+        switch (slot) {
+            case 11 -> openCreateOptionsMenu(player, holder.worldName(), holder.returnPage(), !holder.voidWorld(), holder.chunkyEnabled());
+            case 15 -> openCreateOptionsMenu(player, holder.worldName(), holder.returnPage(), holder.voidWorld(), !holder.chunkyEnabled());
+            case 22 -> openMainMenu(player, ViewMode.OWN, holder.returnPage());
+            case 13 -> {
+                if (holder.voidWorld() && Bukkit.getPluginManager().getPlugin("VoidGen") == null) {
+                    player.sendMessage("§cVoidGen wurde nicht gefunden. Void-Welten können aktuell nicht erstellt werden.");
+                    return;
+                }
+
+                createWorld(player, holder.worldName(), null, false, "private", null, List.of(), holder.voidWorld(), holder.chunkyEnabled());
+            }
+            default -> {
+            }
+        }
+    }
+
     private List<WorldEntry> listWorldsFor(Player player, ViewMode mode) {
         return listWorldsFor(player.getUniqueId().toString(), player.getName(), player.hasPermission(Permissions.ADMIN), mode);
     }
@@ -1443,11 +1528,11 @@ public final class GuiManager {
     private void createWorld(Player player) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
         String worldName = player.getName() + "-" + nextIndex;
-        createWorld(player, worldName, null, false, "private", null, List.of());
+        createWorld(player, worldName, null, false, "private", null, List.of(), false, false);
     }
 
     private void createWorld(Player player, String worldName, String orderLabel) {
-        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel, List.of());
+        createWorld(player, worldName, orderLabel, false, orderLabel == null ? "private" : "ticket", orderLabel, List.of(), false, false);
     }
 
     private void createWorld(
@@ -1459,13 +1544,23 @@ public final class GuiManager {
         String ticketOrderId,
         List<String> customers
     ) {
+        createWorld(player, worldName, orderLabel, isPublic, sourceType, ticketOrderId, customers, false, false);
+    }
+
+    private void createWorld(
+        Player player,
+        String worldName,
+        String orderLabel,
+        boolean isPublic,
+        String sourceType,
+        String ticketOrderId,
+        List<String> customers,
+        boolean voidWorld,
+        boolean chunkyEnabled
+    ) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
 
-        WorldCreator creator = new WorldCreator(worldName)
-            .environment(World.Environment.NORMAL)
-            .type(WorldType.FLAT)
-            .generateStructures(false)
-            .generatorSettings("{\"biome\":\"minecraft:plains\",\"features\":false,\"lakes\":false,\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:dirt\",\"height\":100},{\"block\":\"minecraft:grass_block\",\"height\":1}]}");
+        WorldCreator creator = buildWorldCreator(worldName, voidWorld);
 
         World created = Bukkit.createWorld(creator);
         if (created == null) {
@@ -1489,7 +1584,14 @@ public final class GuiManager {
                 setAnyGameRule(world, false, "advance_weather", "weather_cycle", "doWeatherCycle");
                 setAnyGameRule(world, false, "advance_time", "daylight_cycle", "doDaylightCycle");
 
+                if (voidWorld) {
+                    prepareVoidSpawn(world);
+                }
+
                 runEntityCleanup(world);
+                if (chunkyEnabled) {
+                    configureChunkyWorld(world, player);
+                }
 
                 persistWorldMetadataWithRetry(
                     player.getUniqueId(),
@@ -1509,9 +1611,57 @@ public final class GuiManager {
                 if (orderLabel != null) {
                     player.sendMessage("§aVerknüpfter Auftrag: §f#" + orderLabel);
                 }
+                if (voidWorld) {
+                    player.sendMessage("§7Template: §fVoid");
+                }
+                if (chunkyEnabled) {
+                    player.sendMessage("§aChunky-Vorgenerierung für diese Welt wurde gestartet.");
+                }
                 openMainMenu(player, ViewMode.OWN, 0);
             }
         }.runTaskLater(plugin, 20L);
+    }
+
+    private WorldCreator buildWorldCreator(String worldName, boolean voidWorld) {
+        WorldCreator creator = new WorldCreator(worldName)
+            .environment(World.Environment.NORMAL)
+            .generateStructures(false);
+
+        if (voidWorld) {
+            creator.type(WorldType.NORMAL).generator("VoidGen");
+            return creator;
+        }
+
+        creator
+            .type(WorldType.FLAT)
+            .generatorSettings(FLAT_WORLD_GENERATOR_SETTINGS);
+        return creator;
+    }
+
+    private void configureChunkyWorld(World world, Player player) {
+        if (Bukkit.getPluginManager().getPlugin("Chunky") == null) {
+            plugin.getLogger().warning("Chunky wurde nicht gefunden. Vorgenerierung übersprungen für " + world.getName());
+            player.sendMessage("§eChunky wurde nicht gefunden. Vorgenerierung wurde übersprungen.");
+            return;
+        }
+
+        ConsoleCommandSender console = Bukkit.getConsoleSender();
+        String worldName = world.getName();
+        Bukkit.dispatchCommand(console, "chunky world " + worldName);
+        Bukkit.dispatchCommand(console, "chunky center");
+        Bukkit.dispatchCommand(console, "chunky shape circle");
+        Bukkit.dispatchCommand(console, "chunky radius 2500");
+        Bukkit.dispatchCommand(console, "chunky start");
+    }
+
+    private void prepareVoidSpawn(World world) {
+        int spawnX = 0;
+        int spawnY = 64;
+        int spawnZ = 0;
+
+        world.getBlockAt(spawnX, spawnY - 1, spawnZ).setType(Material.GRASS_BLOCK, false);
+        world.getBlockAt(spawnX, spawnY, spawnZ).setType(Material.AIR, false);
+        world.setSpawnLocation(spawnX, spawnY, spawnZ);
     }
 
     private void persistWorldMetadataWithRetry(
