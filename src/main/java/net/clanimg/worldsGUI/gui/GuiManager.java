@@ -133,20 +133,15 @@ public final class GuiManager {
             List<PendingTicketWorld> worldsToCreate = new ArrayList<>();
 
             for (String orderId : orderIds) {
-                Optional<WorldEntry> existing = repository.findByWorldName(orderId);
-                if (existing.isPresent()) {
-                    if (existing.get().isArchived()) {
-                        repository.unarchiveWorld(orderId);
-                    }
-                    continue;
-                }
-
                 List<String> customers = repository.getOrderSummary(orderId)
                     .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
                         ? List.<String>of()
                         : List.of(summary.customerName().trim()))
                     .orElse(List.of());
-                worldsToCreate.add(new PendingTicketWorld(orderId, customers));
+                boolean archived = repository.findByWorldName(orderId)
+                    .map(WorldEntry::isArchived)
+                    .orElse(false);
+                worldsToCreate.add(new PendingTicketWorld(orderId, customers, archived));
             }
 
             if (worldsToCreate.isEmpty()) {
@@ -160,15 +155,19 @@ public final class GuiManager {
                 }
 
                 for (PendingTicketWorld world : worldsToCreate) {
-                    createWorld(
-                        onlinePlayer,
-                        world.worldName(),
-                        world.worldName(),
-                        false,
-                        "ticket",
-                        world.worldName(),
-                        world.customers()
-                    );
+                    if (Bukkit.getWorld(world.worldName()) == null) {
+                        createWorld(
+                            onlinePlayer,
+                            world.worldName(),
+                            world.worldName(),
+                            false,
+                            "ticket",
+                            world.worldName(),
+                            world.customers()
+                        );
+                    } else if (world.archived()) {
+                        repository.unarchiveWorld(world.worldName());
+                    }
                 }
             });
         });
@@ -1845,6 +1844,6 @@ public final class GuiManager {
     private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs) {
     }
 
-    private record PendingTicketWorld(String worldName, List<String> customers) {
+    private record PendingTicketWorld(String worldName, List<String> customers, boolean archived) {
     }
 }
