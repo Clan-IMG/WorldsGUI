@@ -10,6 +10,12 @@ api:
   profile-base-url: ""
   profile-token: ""
 
+luckperms:
+  group-team: "team"
+  group-kunde: "kunde"
+  group-default: "default"
+  sync-interval-seconds: 30
+
 messages:
   prefix: "&3WorldsGUI &8» &7%messages%"
   no-permission: "Du hast dazu keine Berechtigung!"

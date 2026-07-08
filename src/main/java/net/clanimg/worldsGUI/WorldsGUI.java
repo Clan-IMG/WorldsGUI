@@ -28,6 +28,7 @@ public final class WorldsGUI extends JavaPlugin {
     private BukkitTask joinRequestTask;
     private BukkitTask presenceRefreshTask;
     private BukkitTask ticketSyncTask;
+    private BukkitTask roleSyncTask;
     private ConsoleLoginListener consoleLoginListener;
     private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
 
@@ -73,6 +74,13 @@ public final class WorldsGUI extends JavaPlugin {
         joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
         presenceRefreshTask = Bukkit.getScheduler().runTaskTimer(this, this::refreshOnlinePresence, 20L, 20L * 20L);
         ticketSyncTask = Bukkit.getScheduler().runTaskTimer(this, this::syncTicketWorlds, 20L * 10L, 20L * 30L);
+        int roleSyncSeconds = Math.max(15, getConfig().getInt("luckperms.sync-interval-seconds", 30));
+        roleSyncTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
+            this,
+            this::syncOnlinePlayerRoles,
+            20L * 15L,
+            20L * roleSyncSeconds
+        );
 
         if (getCommand("nav") != null) {
             NavCommand navCommand = new NavCommand(guiManager);
@@ -139,6 +147,10 @@ public final class WorldsGUI extends JavaPlugin {
             ticketSyncTask.cancel();
             ticketSyncTask = null;
         }
+        if (roleSyncTask != null) {
+            roleSyncTask.cancel();
+            roleSyncTask = null;
+        }
         if (guiManager != null) {
             guiManager.shutdown();
         }
@@ -204,6 +216,13 @@ public final class WorldsGUI extends JavaPlugin {
         }
 
         guiManager.syncOpenTicketWorlds();
+    }
+
+    private void syncOnlinePlayerRoles() {
+        if (guiManager == null) {
+            return;
+        }
+        guiManager.syncOnlineMinecraftRoles();
     }
 
     private void disablePluginWithReason(String reason) {

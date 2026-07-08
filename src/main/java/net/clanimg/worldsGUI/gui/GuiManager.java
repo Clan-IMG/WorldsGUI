@@ -13,6 +13,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -91,6 +93,7 @@ public final class GuiManager {
     private final Map<UUID, String> selectedWorldByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, PendingInput> pendingInputs = new ConcurrentHashMap<>();
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
+    private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
 
     public GuiManager(WorldsGUI plugin, WorldsRepository repository) {
         this.plugin = plugin;
@@ -102,6 +105,7 @@ public final class GuiManager {
         selectedWorldByPlayer.clear();
         pendingInputs.clear();
         pendingDeleteByPlayer.clear();
+        lastAppliedLuckPermsGroup.clear();
     }
 
     public void executeNav(Player player) {
@@ -304,28 +308,31 @@ public final class GuiManager {
         }
 
         String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        String endpoint = normalizedBase + "/auth/profile/minecraft/verify/confirm-server";
         String payload = "{\"mcName\":\"" + player.getName() + "\",\"code\":\"" + code + "\",\"playerName\":\"" + player.getName() + "\"}";
 
         player.sendMessage("§7Prüfe Verify-Code ...");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
+            String resolvedRole = null;
             try {
-                HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint))
-                    .header("Content-Type", "application/json")
-                    .header("X-API-Token", apiToken)
-                    .POST(HttpRequest.BodyPublishers.ofString(payload))
-                    .build();
-
-                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = postWithFallback(
+                    normalizedBase,
+                    apiToken,
+                    "/auth/profile/minecraft/verify/confirm-server",
+                    "/minecraft/verify/confirm-server",
+                    payload
+                );
                 String body = response.body() == null ? "" : response.body();
 
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "verified")) {
-                    message = "§aMinecraft-Profil erfolgreich verifiziert.";
+                    resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                    message = "§aMinecraft-Profil erfolgreich verifiziert. §7Rolle: §f" + displayRoleLabel(resolvedRole);
                 } else {
                     String error = extractJsonString(body, "error");
+                    if (error == null || error.isBlank()) {
+                        error = extractJsonString(body, "detail");
+                    }
                     if (error == null || error.isBlank()) {
                         error = "Code ungültig oder abgelaufen.";
                     }
@@ -336,7 +343,13 @@ public final class GuiManager {
             }
 
             String finalMessage = message;
-            Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(finalMessage));
+            String finalRole = resolvedRole;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                player.sendMessage(finalMessage);
+                if (finalRole != null && player.isOnline()) {
+                    applyLuckPermsRole(player, finalRole, true);
+                }
+            });
         });
     }
 
@@ -353,28 +366,31 @@ public final class GuiManager {
         }
 
         String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        String endpoint = normalizedBase + "/auth/profile/minecraft/verify/unverify-server";
         String payload = "{\"mcName\":\"" + player.getName() + "\",\"playerName\":\"" + player.getName() + "\"}";
 
         player.sendMessage("§7Entferne Verifizierung ...");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
+            boolean success = false;
             try {
-                HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint))
-                    .header("Content-Type", "application/json")
-                    .header("X-API-Token", apiToken)
-                    .POST(HttpRequest.BodyPublishers.ofString(payload))
-                    .build();
-
-                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = postWithFallback(
+                    normalizedBase,
+                    apiToken,
+                    "/auth/profile/minecraft/verify/unverify-server",
+                    "/minecraft/verify/unverify-server",
+                    payload
+                );
                 String body = response.body() == null ? "" : response.body();
 
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     message = "§aMinecraft-Verifizierung wurde entfernt.";
+                    success = true;
                 } else {
                     String error = extractJsonString(body, "error");
+                    if (error == null || error.isBlank()) {
+                        error = extractJsonString(body, "detail");
+                    }
                     if (error == null || error.isBlank()) {
                         error = "Unverify fehlgeschlagen.";
                     }
@@ -385,8 +401,132 @@ public final class GuiManager {
             }
 
             String finalMessage = message;
-            Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(finalMessage));
+            boolean finalSuccess = success;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                player.sendMessage(finalMessage);
+                if (finalSuccess && player.isOnline()) {
+                    applyLuckPermsRole(player, "default", true);
+                }
+            });
         });
+    }
+
+    public void syncOnlineMinecraftRoles() {
+        List<Player> onlinePlayers = new ArrayList<>(Bukkit.getOnlinePlayers());
+        for (Player onlinePlayer : onlinePlayers) {
+            syncMinecraftRoleForPlayer(onlinePlayer);
+        }
+    }
+
+    private void syncMinecraftRoleForPlayer(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        String baseUrl = resolveProfileApiBaseUrl();
+        String apiToken = resolveProfileApiToken();
+        if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
+            return;
+        }
+
+        String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        String playerName = player.getName();
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String resolvedRole = null;
+            try {
+                String query = URLEncoder.encode(playerName, StandardCharsets.UTF_8);
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(normalizedBase + "/auth/profile/minecraft/verify/role-sync-server?playerName=" + query))
+                    .header("Accept", "application/json")
+                    .header("X-API-Token", apiToken)
+                    .GET()
+                    .build();
+                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                String body = response.body() == null ? "" : response.body();
+                if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
+                    resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                }
+            } catch (Exception ex) {
+                plugin.getLogger().warning("Role-Sync fehlgeschlagen für " + playerName + ": " + ex.getMessage());
+            }
+
+            String finalRole = resolvedRole;
+            if (finalRole == null) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(player.getUniqueId());
+                if (online != null && online.isOnline()) {
+                    applyLuckPermsRole(online, finalRole, false);
+                }
+            });
+        });
+    }
+
+    private HttpResponse<String> postWithFallback(
+        String normalizedBase,
+        String apiToken,
+        String primaryPath,
+        String fallbackPath,
+        String payload
+    ) throws Exception {
+        HttpResponse<String> primary = postJson(normalizedBase + primaryPath, apiToken, payload);
+        if (primary.statusCode() != 404) {
+            return primary;
+        }
+        return postJson(normalizedBase + fallbackPath, apiToken, payload);
+    }
+
+    private HttpResponse<String> postJson(String endpoint, String apiToken, String payload) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(endpoint))
+            .header("Content-Type", "application/json")
+            .header("X-API-Token", apiToken)
+            .POST(HttpRequest.BodyPublishers.ofString(payload))
+            .build();
+        return HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private String normalizeRole(String roleRaw) {
+        String role = (roleRaw == null ? "" : roleRaw.trim().toLowerCase(Locale.ROOT));
+        return switch (role) {
+            case "team", "kunde" -> role;
+            default -> "default";
+        };
+    }
+
+    private String displayRoleLabel(String role) {
+        return switch (normalizeRole(role)) {
+            case "team" -> "Team";
+            case "kunde" -> "Kunde";
+            default -> "Default";
+        };
+    }
+
+    private void applyLuckPermsRole(Player player, String role, boolean force) {
+        String roleKey = normalizeRole(role);
+        UUID playerId = player.getUniqueId();
+        String current = lastAppliedLuckPermsGroup.get(playerId);
+        if (!force && roleKey.equals(current)) {
+            return;
+        }
+
+        String group = switch (roleKey) {
+            case "team" -> plugin.getConfig().getString("luckperms.group-team", "team");
+            case "kunde" -> plugin.getConfig().getString("luckperms.group-kunde", "kunde");
+            default -> plugin.getConfig().getString("luckperms.group-default", "default");
+        };
+        if (group == null || group.isBlank()) {
+            return;
+        }
+
+        boolean executed = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent set " + group.trim());
+        if (executed) {
+            lastAppliedLuckPermsGroup.put(playerId, roleKey);
+        } else {
+            plugin.getLogger().warning("LuckPerms-Role konnte nicht gesetzt werden für " + player.getName() + ": " + group);
+        }
     }
 
     private String resolveProfileApiBaseUrl() {
