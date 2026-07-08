@@ -12,6 +12,7 @@ public record WorldEntry(
     String orderLabel,
     String ticketOrderId,
     String sourceType,
+    String serverName,
     Integer builderUserId,
     List<String> customers,
     List<String> invitedPlayers,

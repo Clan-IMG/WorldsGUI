@@ -108,6 +108,40 @@ public final class WorldsRepository {
         boolean isPublic,
         boolean isArchived
     ) {
+        return insertWorld(
+            worldName,
+            ownerUuid,
+            ownerName,
+            orderLabel,
+            ticketOrderId,
+            sourceType,
+            builderUserId,
+            customers,
+            worldIndex,
+            displayName,
+            iconMaterial,
+            isPublic,
+            isArchived,
+            null
+        );
+    }
+
+    public boolean insertWorld(
+        String worldName,
+        String ownerUuid,
+        String ownerName,
+        String orderLabel,
+        String ticketOrderId,
+        String sourceType,
+        Integer builderUserId,
+        List<String> customers,
+        int worldIndex,
+        String displayName,
+        String iconMaterial,
+        boolean isPublic,
+        boolean isArchived,
+        String serverNameOverride
+    ) {
         JsonObject body = new JsonObject();
         body.addProperty("worldName", worldName);
         body.addProperty("ownerUuid", ownerUuid);
@@ -142,6 +176,16 @@ public final class WorldsRepository {
         body.addProperty("worldIndex", worldIndex);
         body.addProperty("displayName", displayName);
         body.addProperty("iconMaterial", iconMaterial);
+        String targetServerName = serverNameOverride == null ? "" : serverNameOverride.trim();
+        if (targetServerName.isBlank()) {
+            String localServerName = resolveLocalServerId();
+            if (!localServerName.isBlank()) {
+                targetServerName = localServerName;
+            }
+        }
+        if (!targetServerName.isBlank()) {
+            body.addProperty("serverName", targetServerName);
+        }
         body.addProperty("isPublic", isPublic);
         body.addProperty("isArchived", isArchived);
         try {
@@ -225,6 +269,14 @@ public final class WorldsRepository {
 
     public List<WorldEntry> listOpenTicketWorlds() {
         return listWorlds("/worlds/tickets/open", "open ticket worlds");
+    }
+
+    public List<WorldEntry> listServerWorlds(String serverName) {
+        String normalized = serverName == null ? "" : serverName.trim();
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        return listWorlds("/worlds/server/" + encode(normalized), "server worlds");
     }
 
     public List<WorldEntry> listArchivedWorlds() {
@@ -555,6 +607,7 @@ public final class WorldsRepository {
             getNullableString(row, "orderLabel"),
             getNullableString(row, "ticketOrderId"),
             getNullableString(row, "sourceType"),
+            getNullableString(row, "serverName"),
             row.has("builderUserId") && !row.get("builderUserId").isJsonNull() ? row.get("builderUserId").getAsInt() : null,
             getStringList(row, "customers"),
             getStringList(row, "invitedPlayers"),
@@ -653,6 +706,22 @@ public final class WorldsRepository {
             out = out.substring(0, out.length() - 1);
         }
         return out;
+    }
+
+    private String resolveLocalServerId() {
+        for (String envKey : List.of(
+            "SIMPLECLOUD_SERVER_ID",
+            "SIMPLECLOUD_SERVICE_NAME",
+            "CLOUDNET_SERVICE_NAME",
+            "SERVER_NAME",
+            "HOSTNAME"
+        )) {
+            String value = System.getenv(envKey);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
     }
 
     private String abbreviate(String value, int maxLen) {

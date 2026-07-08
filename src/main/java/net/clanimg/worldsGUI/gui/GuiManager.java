@@ -3,6 +3,7 @@ package net.clanimg.worldsGUI.gui;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -94,6 +95,7 @@ public final class GuiManager {
     private final Map<UUID, PendingInput> pendingInputs = new ConcurrentHashMap<>();
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
+    private volatile boolean warnedMissingLocalServerId;
 
     public GuiManager(WorldsGUI plugin, WorldsRepository repository) {
         this.plugin = plugin;
@@ -212,23 +214,37 @@ public final class GuiManager {
 
     public void syncOpenTicketWorlds() {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            List<WorldEntry> openTicketWorlds = repository.listOpenTicketWorlds();
-            if (openTicketWorlds.isEmpty()) {
+            Map<String, WorldEntry> worldsByName = new LinkedHashMap<>();
+            for (WorldEntry entry : repository.listOpenTicketWorlds()) {
+                worldsByName.put(entry.worldName().toLowerCase(Locale.ROOT), entry);
+            }
+
+            String localServerId = resolveLocalServerId();
+            if (localServerId != null && !localServerId.isBlank()) {
+                for (WorldEntry entry : repository.listServerWorlds(localServerId)) {
+                    worldsByName.put(entry.worldName().toLowerCase(Locale.ROOT), entry);
+                }
+            }
+
+            if (worldsByName.isEmpty()) {
                 return;
             }
 
             Bukkit.getScheduler().runTask(plugin, () -> {
-                for (WorldEntry entry : openTicketWorlds) {
+                for (WorldEntry entry : worldsByName.values()) {
+                    if (!isWorldOnThisServer(entry)) {
+                        continue;
+                    }
                     if (Bukkit.getWorld(entry.worldName()) != null) {
                         continue;
                     }
-                    createTicketWorldFromMetadata(entry);
+                    createWorldFromMetadata(entry);
                 }
             });
         });
     }
 
-    private void createTicketWorldFromMetadata(WorldEntry entry) {
+    private void createWorldFromMetadata(WorldEntry entry) {
         String worldName = entry.worldName();
         String ownerUuid = entry.ownerUuid();
         String ownerName = entry.ownerName();
@@ -241,11 +257,7 @@ public final class GuiManager {
             : entry.customers();
         int worldIndex = repository.nextWorldIndex(ownerUuid);
 
-        WorldCreator creator = new WorldCreator(worldName)
-            .environment(World.Environment.NORMAL)
-            .type(WorldType.FLAT)
-            .generateStructures(false)
-            .generatorSettings("{\"biome\":\"minecraft:plains\",\"features\":false,\"lakes\":false,\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:dirt\",\"height\":100},{\"block\":\"minecraft:grass_block\",\"height\":1}]}");
+        WorldCreator creator = buildWorldCreator(worldName, false);
 
         World created = Bukkit.createWorld(creator);
         if (created == null) {
@@ -277,13 +289,14 @@ public final class GuiManager {
                     worldName,
                     entry.orderLabel(),
                     entry.ticketOrderId(),
-                    "ticket",
+                    entry.sourceType(),
                     customers,
                     worldIndex,
-                    false,
+                    entry.isPublic(),
                     3,
-                        false,
-                        false
+                    false,
+                    false,
+                    entry.serverName()
                 );
             }
         }.runTaskLater(plugin, 20L);
@@ -1704,6 +1717,38 @@ public final class GuiManager {
         boolean notifyWhenVisible
     ) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
+        String targetServer = resolveTargetCreationServer();
+        String localServer = resolveLocalServerId();
+        boolean shouldCreateLocally = targetServer.isBlank()
+            || localServer.isBlank()
+            || targetServer.equalsIgnoreCase(localServer);
+
+        if (!shouldCreateLocally) {
+            player.sendMessage("§7Dieser Server ist nicht in api.allowed-server-names.");
+            player.sendMessage("§7Die Welt wird auf §f" + targetServer + " §7erstellt und du wirst dorthin verbunden.");
+
+            persistWorldMetadataWithRetry(
+                player.getUniqueId(),
+                player.getName(),
+                worldName,
+                orderLabel,
+                ticketOrderId,
+                sourceType,
+                customers,
+                nextIndex,
+                isPublic,
+                3,
+                false,
+                notifyWhenVisible,
+                targetServer
+            );
+
+            if (notifyWhenVisible) {
+                player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst verbunden, sobald sie dort sichtbar ist.");
+                openMainMenu(player, ViewMode.OWN, 0);
+            }
+            return;
+        }
 
         WorldCreator creator = buildWorldCreator(worldName, voidWorld);
 
@@ -1750,7 +1795,8 @@ public final class GuiManager {
                     isPublic,
                     3,
                     false,
-                    notifyWhenVisible
+                    notifyWhenVisible,
+                    targetServer
                 );
 
                 send(player, "create-success", "%world%", worldName);
@@ -1825,7 +1871,8 @@ public final class GuiManager {
         boolean isPublic,
         int retriesLeft,
         boolean wasRetry,
-        boolean notifyWhenVisible
+        boolean notifyWhenVisible,
+        String serverNameOverride
     ) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             boolean persisted = repository.insertWorld(
@@ -1841,7 +1888,8 @@ public final class GuiManager {
                 worldName,
                 Material.GRASS_BLOCK.name(),
                 isPublic,
-                false
+                false,
+                serverNameOverride
             );
 
             if (persisted) {
@@ -1853,7 +1901,7 @@ public final class GuiManager {
                                 online.sendMessage("§aDeine Welt §f" + worldName + " §aist jetzt im GUI sichtbar.");
                                 openMainMenu(online, ViewMode.OWN, 0);
                                 joinWorld(online, worldName, false);
-                                online.sendMessage("§aDu wurdest automatisch in deine neue Welt teleportiert.");
+                                online.sendMessage("§aDu wurdest automatisch zur neuen Welt bzw. auf den Zielserver verbunden.");
                             }
                             if (wasRetry) {
                                 online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");
@@ -1887,7 +1935,8 @@ public final class GuiManager {
                     isPublic,
                     retriesLeft - 1,
                     true,
-                    notifyWhenVisible
+                    notifyWhenVisible,
+                    serverNameOverride
                 ),
                 20L * 5
             );
@@ -2033,6 +2082,14 @@ public final class GuiManager {
             return false;
         }
 
+        if (!isWorldOnThisServer(entry)) {
+            if (notify) {
+                player.sendMessage("§7Diese Welt liegt auf einem anderen Server. Du wirst verbunden ...");
+            }
+            connectPlayerToWorldServer(player, entry);
+            return true;
+        }
+
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
@@ -2052,6 +2109,132 @@ public final class GuiManager {
             send(player, "join-success", "%world%", worldName);
         }
         return true;
+    }
+
+    private boolean isWorldOnThisServer(WorldEntry entry) {
+        String worldServer = entry.serverName();
+        if (worldServer == null || worldServer.isBlank()) {
+            return true;
+        }
+        String localServer = resolveLocalServerId();
+        if (localServer == null || localServer.isBlank()) {
+            return false;
+        }
+        return worldServer.trim().equalsIgnoreCase(localServer.trim());
+    }
+
+    private String resolveLocalServerId() {
+        for (String envKey : List.of(
+            "SIMPLECLOUD_SERVER_ID",
+            "SIMPLECLOUD_SERVICE_NAME",
+            "CLOUDNET_SERVICE_NAME",
+            "SERVER_NAME",
+            "HOSTNAME"
+        )) {
+            String value = System.getenv(envKey);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+
+        if (!warnedMissingLocalServerId) {
+            warnedMissingLocalServerId = true;
+            plugin.getLogger().warning(
+                "Konnte keine lokale Server-ID aus ENV ermitteln. " +
+                "Setze SIMPLECLOUD_SERVER_ID oder SIMPLECLOUD_SERVICE_NAME."
+            );
+        }
+        return "";
+    }
+
+    private String resolveTargetCreationServer() {
+        String localServer = resolveLocalServerId();
+        List<String> allowedServers = resolveAllowedServerNames();
+        if (allowedServers.isEmpty()) {
+            return localServer == null ? "" : localServer;
+        }
+
+        for (String allowed : allowedServers) {
+            if (allowed.equalsIgnoreCase(localServer)) {
+                return localServer;
+            }
+        }
+
+        return allowedServers.get(0);
+    }
+
+    private List<String> resolveAllowedServerNames() {
+        List<String> configured = plugin.getConfig().getStringList("api.allowed-server-names");
+        List<String> out = new ArrayList<>();
+        for (String value : configured) {
+            if (value == null) {
+                continue;
+            }
+            String normalized = value.trim();
+            if (!normalized.isBlank()) {
+                out.add(normalized);
+            }
+        }
+        return out;
+    }
+
+    private void connectPlayerToWorldServer(Player player, WorldEntry entry) {
+        String targetServer = entry.serverName();
+        if (targetServer == null || targetServer.isBlank()) {
+            player.sendMessage("§cKein Zielserver für diese Welt hinterlegt.");
+            return;
+        }
+
+        String controllerUrl = plugin.getConfig().getString("simplecloud.controller-url", "");
+        String networkId = plugin.getConfig().getString("simplecloud.network-id", "");
+        String networkSecret = plugin.getConfig().getString("simplecloud.network-secret", "");
+        if (controllerUrl == null || controllerUrl.isBlank() || networkId == null || networkId.isBlank() || networkSecret == null || networkSecret.isBlank()) {
+            player.sendMessage("§cSimpleCloud ist nicht vollständig konfiguriert (controller-url/network-id/network-secret).");
+            return;
+        }
+
+        String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
+        String playerId = URLEncoder.encode(player.getUniqueId().toString(), StandardCharsets.UTF_8);
+        String endpoint = normalizedController + "/v0/players/connect?player_id=" + playerId;
+        String payload = "{\"server_id\":\"" + targetServer + "\"}";
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String message;
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(endpoint))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "*/*")
+                    .header("X-Network-ID", networkId)
+                    .header("X-Network-Secret", networkSecret)
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
+                    .build();
+
+                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                String body = response.body() == null ? "" : response.body();
+                if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "success")) {
+                    message = "§aDu wirst auf §f" + targetServer + " §averbunden ...";
+                } else {
+                    String detail = extractJsonString(body, "message");
+                    if (detail == null || detail.isBlank()) {
+                        detail = extractJsonString(body, "error");
+                    }
+                    if (detail == null || detail.isBlank()) {
+                        detail = "Transfer fehlgeschlagen (HTTP " + response.statusCode() + ")";
+                    }
+                    message = "§cServer-Wechsel fehlgeschlagen: §f" + detail;
+                }
+            } catch (Exception ex) {
+                message = "§cServer-Wechsel fehlgeschlagen: §f" + ex.getMessage();
+            }
+
+            String finalMessage = message;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) {
+                    player.sendMessage(finalMessage);
+                }
+            });
+        });
     }
 
     private void applyPreferredGameMode(Player player, WorldEntry entry) {
@@ -2115,6 +2298,9 @@ public final class GuiManager {
         lore.add(Component.text("Owner: " + entry.ownerName(), NamedTextColor.GRAY));
         if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
             lore.add(Component.text("Ticket: #" + entry.ticketOrderId(), NamedTextColor.GOLD));
+        }
+        if (entry.serverName() != null && !entry.serverName().isBlank()) {
+            lore.add(Component.text("Server: " + entry.serverName(), NamedTextColor.GRAY));
         }
         if (entry.orderLabel() != null && !entry.orderLabel().isBlank()) {
             lore.add(Component.text("Auftrag: #" + entry.orderLabel(), NamedTextColor.AQUA));
