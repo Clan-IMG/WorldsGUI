@@ -789,12 +789,29 @@ public final class GuiManager {
             return;
         }
 
-        boolean executed = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent set " + group.trim());
+        String trimmedGroup = group.trim();
+        String teamGroup = plugin.getConfig().getString("luckperms.group-team", "team");
+        String kundeGroup = plugin.getConfig().getString("luckperms.group-kunde", "kunde");
+        String defaultGroup = plugin.getConfig().getString("luckperms.group-default", "default");
+
+        boolean executed = true;
+        executed &= dispatchLuckPermsParentRemove(player.getName(), teamGroup);
+        executed &= dispatchLuckPermsParentRemove(player.getName(), kundeGroup);
+        executed &= dispatchLuckPermsParentRemove(player.getName(), defaultGroup);
+        executed &= Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + trimmedGroup);
+
         if (executed) {
             lastAppliedLuckPermsGroup.put(playerId, roleKey);
         } else {
             plugin.getLogger().warning("LuckPerms-Role konnte nicht gesetzt werden für " + player.getName() + ": " + group);
         }
+    }
+
+    private boolean dispatchLuckPermsParentRemove(String playerName, String group) {
+        if (group == null || group.isBlank()) {
+            return true;
+        }
+        return Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + playerName + " parent remove " + group.trim());
     }
 
     private String resolveProfileApiBaseUrl() {
