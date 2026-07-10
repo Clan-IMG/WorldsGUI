@@ -7,7 +7,7 @@ api:
   request-timeout-seconds: 20
   # Optional: Base URL for profile/verify endpoints.
   # Set this to api.clan-img.net if /verify is handled by the main API service.
-  profile-base-url: ""
+  profile-base-url: "https://api.clan-img.net"
   profile-token: ""
 
   allowed-server-names:
@@ -23,8 +23,8 @@ luckperms:
 simplecloud:
   # Controller API endpoint and credentials for player transfer
   controller-url: "https://controller.simplecloud.app"
-  network-id: ""
-  network-secret: ""
+  network-id: "2be2cf66-80e0-4e47-8d80-b97d6f14aaa7"
+  network-secret: "FDt6TlD5z464KdB7SI3YyDrYl2EIKyo1"
 
 messages:
   prefix: "&3WorldsGUI &8» &7%messages%"

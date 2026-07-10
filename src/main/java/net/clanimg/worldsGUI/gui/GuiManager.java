@@ -22,7 +22,28 @@ import java.net.http.HttpResponse;
 import net.clanimg.worldsGUI.Permissions;
 import net.clanimg.worldsGUI.WorldsGUI;
 import net.clanimg.worldsGUI.data.WorldsRepository;
+import net.clanimg.worldsGUI.guiconfig.GuiAction;
+import net.clanimg.worldsGUI.guiconfig.GuiConfig;
+import net.clanimg.worldsGUI.guiconfig.GuiDefinition;
+import net.clanimg.worldsGUI.guiconfig.GuiSlotDefinition;
+import net.clanimg.worldsGUI.guiconfig.GuiSlotRangeDefinition;
+import net.clanimg.worldsGUI.guiconfig.GuiTrigger;
+import net.clanimg.worldsGUI.guiconfig.SlotMapper;
+import net.clanimg.worldsGUI.guiruntime.PlaceholderExpander;
+import net.clanimg.worldsGUI.guiruntime.PlayerGuiSession;
+import net.clanimg.worldsGUI.guiruntime.PlayerSessionManager;
+import net.clanimg.worldsGUI.guiruntime.TriggerDispatcher;
 import net.clanimg.worldsGUI.model.WorldEntry;
+import io.papermc.paper.dialog.Dialog;
+import io.papermc.paper.dialog.DialogResponseView;
+import io.papermc.paper.registry.data.dialog.ActionButton;
+import io.papermc.paper.registry.data.dialog.DialogBase;
+import io.papermc.paper.registry.data.dialog.action.DialogAction;
+import io.papermc.paper.registry.data.dialog.action.DialogActionCallback;
+import io.papermc.paper.registry.data.dialog.input.DialogInput;
+import io.papermc.paper.registry.data.dialog.input.TextDialogInput;
+import io.papermc.paper.registry.data.dialog.type.DialogType;
+import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -57,6 +78,7 @@ public final class GuiManager {
     private static final int SETTINGS_SIZE = 36;
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
+    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of("confirm", "create-world", "select-server");
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
     private static final Pattern LEGACY_CODE_PATTERN = Pattern.compile("(?i)[&§]([0-9A-FK-OR])");
@@ -95,12 +117,21 @@ public final class GuiManager {
     private final Map<UUID, PendingInput> pendingInputs = new ConcurrentHashMap<>();
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
+    private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
     private volatile boolean warnedMissingLocalServerId;
+    private volatile GuiConfig guiConfig;
+    private final PlayerSessionManager playerSessions = new PlayerSessionManager();
+    private final TriggerDispatcher triggerDispatcher;
 
     public GuiManager(WorldsGUI plugin, WorldsRepository repository) {
         this.plugin = plugin;
         this.repository = repository;
         this.worldKey = new NamespacedKey(plugin, "world_name");
+        this.triggerDispatcher = new TriggerDispatcher(
+            this::openGui,
+            (player, command) -> Bukkit.dispatchCommand(player, command),
+            this::requestAnvilInput
+        );
     }
 
     public void shutdown() {
@@ -108,6 +139,156 @@ public final class GuiManager {
         pendingInputs.clear();
         pendingDeleteByPlayer.clear();
         lastAppliedLuckPermsGroup.clear();
+        playerSessions.clear();
+        pendingAnvilInputs.clear();
+    }
+
+    /**
+     * Wird beim Plugin-Start nach erfolgreicher Validierung von guis.yml gesetzt.
+     * Die eigentliche Runtime-Nutzung (Rendern/Klicks über die neue Engine) folgt in einem späteren Schritt.
+     */
+    public void setGuiConfig(GuiConfig guiConfig) {
+        this.guiConfig = guiConfig;
+    }
+
+    public GuiConfig guiConfig() {
+        return guiConfig;
+    }
+
+    /**
+     * Zentraler Einstiegspunkt zum Öffnen eines GUIs über eine gui-id (aus guis.yml Triggern
+     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). GUIs aus {@link #RUNTIME_GUI_IDS}
+     * werden über die neue Runtime-Engine gerendert; alle anderen bekannten IDs fallen (Hybrid-Rollout)
+     * vorerst auf die bestehende, hardcodierte Java-GUI-Logik zurück.
+     */
+    private void openGui(Player player, String guiId) {
+        if (guiId == null || guiId.isBlank()) {
+            return;
+        }
+        String normalized = guiId.trim().toLowerCase(Locale.ROOT);
+        if (RUNTIME_GUI_IDS.contains(normalized)) {
+            openRuntimeGui(player, normalized);
+            return;
+        }
+        if ("my-worlds".equals(normalized)) {
+            openMainMenu(player, ViewMode.OWN, 0);
+            return;
+        }
+        plugin.getLogger().warning("GUI '" + guiId + "' wird von der neuen guis.yml-Engine noch nicht unterstützt.");
+    }
+
+    private void openRuntimeGui(Player player, String guiId) {
+        if (guiConfig == null) {
+            player.sendMessage("§cGUI-Konfiguration wurde nicht geladen.");
+            return;
+        }
+
+        Optional<GuiDefinition> definitionOpt = guiConfig.get(guiId);
+        if (definitionOpt.isEmpty()) {
+            player.sendMessage("§cGUI '" + guiId + "' wurde nicht gefunden.");
+            return;
+        }
+
+        GuiDefinition definition = definitionOpt.get();
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+
+        RuntimeGuiHolder holder = new RuntimeGuiHolder(guiId);
+        Inventory inventory = Bukkit.createInventory(holder, definition.size(), parseFormattedMessage(definition.title()));
+
+        renderRowSlots(inventory, holder, definition, player, session);
+        renderSlotRange(inventory, holder, definition, player, session);
+
+        player.openInventory(inventory);
+    }
+
+    private void renderRowSlots(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player, PlayerGuiSession session) {
+        for (int rowSlot = 1; rowSlot <= 9; rowSlot++) {
+            int absolute = SlotMapper.mapRowSlotToAbsolute(rowSlot, definition.position(), definition.size());
+            GuiSlotDefinition slotDefinition = definition.rowSlots().get(rowSlot);
+
+            if (slotDefinition == null) {
+                inventory.setItem(absolute, namedItem(Material.GRAY_STAINED_GLASS_PANE, ""));
+                continue;
+            }
+
+            String title = PlaceholderExpander.expand(slotDefinition.title(), player, session, Map.of());
+            Material material = resolveMaterial(slotDefinition.material());
+            inventory.setItem(absolute, namedItem(material, title == null ? "" : title));
+
+            if (slotDefinition.action() != null) {
+                holder.putClickHandler(absolute, slotDefinition.action(), Map.of());
+            }
+        }
+    }
+
+    private void renderSlotRange(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player, PlayerGuiSession session) {
+        GuiSlotRangeDefinition range = definition.slotRange();
+        if (range == null) {
+            return;
+        }
+
+        List<Map<String, String>> items = resolveSlotRangeItems(range.source());
+        int slotCount = range.to() - range.from() + 1;
+        Material material = resolveMaterial(range.material());
+
+        for (int i = 0; i < slotCount && i < items.size(); i++) {
+            int absolute = range.from() + i;
+            Map<String, String> extra = items.get(i);
+            String title = PlaceholderExpander.expand(range.title(), player, session, extra);
+            inventory.setItem(absolute, namedItem(material, title == null ? "" : title));
+
+            if (range.action() != null) {
+                holder.putClickHandler(absolute, range.action(), extra);
+            }
+        }
+    }
+
+    /**
+     * Liefert die dynamischen Werte je generiertem Slot-Range-Item (z.B. server_id/server_name).
+     * trusted-players/luckperms-players werden in einem späteren Schritt angebunden.
+     */
+    private List<Map<String, String>> resolveSlotRangeItems(String source) {
+        if ("servers".equalsIgnoreCase(source)) {
+            List<Map<String, String>> items = new ArrayList<>();
+            for (String serverName : resolveAllowedServerNames()) {
+                items.add(Map.of("server_id", serverName, "server_name", serverName));
+            }
+            return items;
+        }
+        return List.of();
+    }
+
+    private Material resolveMaterial(String materialName) {
+        if (materialName == null || materialName.isBlank()) {
+            return Material.GRAY_STAINED_GLASS_PANE;
+        }
+        Material material = Material.matchMaterial(materialName.trim());
+        if (material == null) {
+            plugin.getLogger().warning("Unbekanntes Material in guis.yml: '" + materialName + "', nutze STONE als Fallback.");
+            return Material.STONE;
+        }
+        return material;
+    }
+
+    private void handleRuntimeGuiClick(Player player, InventoryClickEvent event, RuntimeGuiHolder holder) {
+        int slot = event.getRawSlot();
+        Inventory top = event.getView().getTopInventory();
+        if (slot < 0 || slot >= top.getSize()) {
+            return;
+        }
+
+        RuntimeGuiHolder.ClickHandler clickHandler = holder.clickHandler(slot);
+        if (clickHandler == null || clickHandler.action() == null) {
+            return;
+        }
+
+        GuiTrigger trigger = clickHandler.action().resolve(event.isLeftClick(), event.isRightClick());
+        if (trigger == null) {
+            return;
+        }
+
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        triggerDispatcher.execute(player, session, trigger, clickHandler.extra(), holder.guiId() + ":" + slot);
     }
 
     public void executeNav(Player player) {
@@ -774,6 +955,55 @@ public final class GuiManager {
         createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder, List.of());
     }
 
+    /**
+     * Neuer Wizard-Flow aus guis.yml: create-world (world-type wählen) -> select-server (Server wählen)
+     * -> confirm-command "nav create %selection:world-type% %selection:server%". Der Weltname wird
+     * serverseitig automatisch im Format <spieler>-<id> generiert (kein manueller Name wie bei
+     * /nav my-world create).
+     */
+    public void executeNavCreateWizard(Player player, String worldTypeArg, String serverIdArg) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CREATE, true)) {
+            return;
+        }
+
+        String normalizedType = worldTypeArg == null ? "" : worldTypeArg.trim().toUpperCase(Locale.ROOT);
+        boolean voidWorld;
+        if ("VOID".equals(normalizedType)) {
+            voidWorld = true;
+        } else if ("FLAT".equals(normalizedType)) {
+            voidWorld = false;
+        } else {
+            player.sendMessage("§cUngültiger Welt-Typ. Erlaubt: VOID oder FLAT");
+            return;
+        }
+
+        String normalizedServer = serverIdArg == null ? "" : serverIdArg.trim();
+        if (normalizedServer.isBlank()) {
+            player.sendMessage("§cKein Server angegeben.");
+            return;
+        }
+
+        List<String> allowedServers = resolveAllowedServerNames();
+        if (!allowedServers.isEmpty() && allowedServers.stream().noneMatch(server -> server.equalsIgnoreCase(normalizedServer))) {
+            player.sendMessage("§cUnbekannter Server: §f" + normalizedServer);
+            return;
+        }
+
+        if (voidWorld && Bukkit.getPluginManager().getPlugin("VoidGen") == null) {
+            player.sendMessage("§cVoidGen wurde nicht gefunden. Void-Welten können aktuell nicht erstellt werden.");
+            return;
+        }
+
+        int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
+        String worldName = player.getName() + "-" + nextIndex;
+        if (repository.findByWorldName(worldName).isPresent()) {
+            player.sendMessage("§cDiese Welt existiert bereits, bitte versuche es erneut.");
+            return;
+        }
+
+        createWorld(player, worldName, null, false, "private", null, List.of(), voidWorld, false, true, normalizedServer);
+    }
+
     public void executeNavDelete(Player player, String worldName) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_DELETE, true)) {
             return;
@@ -1148,11 +1378,26 @@ public final class GuiManager {
         if (holder instanceof IconSelectorHolder selectorHolder) {
             event.setCancelled(true);
             handleIconSelectorClick(player, event, selectorHolder);
+            return;
+        }
+
+        if (holder instanceof RuntimeGuiHolder runtimeHolder) {
+            event.setCancelled(true);
+            handleRuntimeGuiClick(player, event, runtimeHolder);
         }
     }
 
     public void handleChat(AsyncChatEvent event) {
         Player player = event.getPlayer();
+
+        GuiTrigger pendingAnvilTrigger = pendingAnvilInputs.remove(player.getUniqueId());
+        if (pendingAnvilTrigger != null) {
+            event.setCancelled(true);
+            String anvilInput = PlainTextComponentSerializer.plainText().serialize(event.message()).trim();
+            Bukkit.getScheduler().runTask(plugin, () -> completeAnvilInput(player, pendingAnvilTrigger, anvilInput));
+            return;
+        }
+
         PendingInput pending = pendingInputs.remove(player.getUniqueId());
         if (pending == null) {
             return;
@@ -1169,6 +1414,70 @@ public final class GuiManager {
             }
             openSettingsMenu(player, pending.worldName(), 0);
         });
+    }
+
+    /**
+     * Verarbeitet die Eingabe eines anvil-input Triggers (Dialog-API oder Chat-Fallback) und
+     * navigiert anschließend gemäß guis.yml zum konfigurierten Ziel-GUI weiter.
+     */
+    private void completeAnvilInput(Player player, GuiTrigger trigger, String input) {
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        session.putParam(trigger.paramKey(), input == null ? "" : input);
+        session.pushCurrentToHistory();
+        session.setCurrentGuiId(trigger.guiId());
+        openGui(player, trigger.guiId());
+    }
+
+    /**
+     * Fordert die Eingabe für einen anvil-input Trigger an. Primär über die Minecraft Dialog-API
+     * (1.21.6+); falls die Dialog-API aus irgendeinem Grund fehlschlägt (z.B. inkompatibler Client),
+     * wird kontrolliert auf eine einfache Chat-Eingabe zurückgefallen.
+     */
+    private void requestAnvilInput(Player player, PlayerGuiSession session, GuiTrigger trigger) {
+        try {
+            showAnvilInputDialog(player, trigger);
+        } catch (Throwable t) {
+            plugin.getLogger().warning("Dialog-API für anvil-input fehlgeschlagen (" + t.getMessage() + "), nutze Chat-Fallback.");
+            pendingAnvilInputs.put(player.getUniqueId(), trigger);
+            player.sendMessage("§eBitte gib deine Eingabe im Chat ein.");
+        }
+    }
+
+    private void showAnvilInputDialog(Player player, GuiTrigger trigger) {
+        Component title = parseFormattedMessage(trigger.anvilTitle());
+
+        TextDialogInput textInput = DialogInput.text("input", title)
+            .initial("")
+            .maxLength(64)
+            .build();
+
+        DialogActionCallback callback = (DialogResponseView view, net.kyori.adventure.audience.Audience audience) -> {
+            String input = view.getText("input");
+            Bukkit.getScheduler().runTask(plugin, () -> completeAnvilInput(player, trigger, input));
+        };
+
+        ActionButton confirmButton = ActionButton.create(
+            Component.text("Bestätigen"),
+            Component.empty(),
+            150,
+            DialogAction.customClick(callback, ClickCallback.Options.builder().build())
+        );
+
+        DialogBase base = DialogBase.create(
+            title,
+            title,
+            true,
+            false,
+            DialogBase.DialogAfterAction.CLOSE,
+            List.of(),
+            List.of(textInput)
+        );
+
+        Dialog dialog = Dialog.create(factory -> factory.empty()
+            .base(base)
+            .type(DialogType.notice(confirmButton)));
+
+        player.showDialog(dialog);
     }
 
     private void handleMainMenuClick(Player player, InventoryClickEvent event, MainHolder holder) {
@@ -1193,7 +1502,15 @@ public final class GuiManager {
             if (holder.mode() != ViewMode.OWN) {
                 return;
             }
-            openCreateOptionsMenu(player, holder.page());
+            if (guiConfig != null && guiConfig.get("create-world").isPresent()) {
+                PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+                session.setCurrentGuiId("my-worlds");
+                session.pushCurrentToHistory();
+                session.setCurrentGuiId("create-world");
+                openRuntimeGui(player, "create-world");
+            } else {
+                openCreateOptionsMenu(player, holder.page());
+            }
             return;
         }
 
@@ -1432,6 +1749,10 @@ public final class GuiManager {
         String playerUuid = playerId.toString();
         String playerName = player.getName();
         boolean admin = player.hasPermission(Permissions.ADMIN);
+
+        if (mode == ViewMode.OWN) {
+            playerSessions.getOrCreate(playerId).setCurrentGuiId("my-worlds");
+        }
 
         player.openInventory(buildMainMenu(player.hasPermission(Permissions.ADMIN), mode, page, List.of(), true, player.getWorld().getName()));
 
@@ -1716,8 +2037,30 @@ public final class GuiManager {
         boolean chunkyEnabled,
         boolean notifyWhenVisible
     ) {
+        createWorld(player, worldName, orderLabel, isPublic, sourceType, ticketOrderId, customers, voidWorld, chunkyEnabled, notifyWhenVisible, null);
+    }
+
+    /**
+     * @param requestedServer explizit gewünschter Ziel-Server (z.B. aus dem guis.yml create-world/select-server
+     *                        Wizard); wenn null/leer, wird der Ziel-Server wie bisher automatisch bestimmt.
+     */
+    private void createWorld(
+        Player player,
+        String worldName,
+        String orderLabel,
+        boolean isPublic,
+        String sourceType,
+        String ticketOrderId,
+        List<String> customers,
+        boolean voidWorld,
+        boolean chunkyEnabled,
+        boolean notifyWhenVisible,
+        String requestedServer
+    ) {
         int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
-        String targetServer = resolveTargetCreationServer();
+        String targetServer = requestedServer != null && !requestedServer.isBlank()
+            ? requestedServer.trim()
+            : resolveTargetCreationServer();
         String localServer = resolveLocalServerId();
         boolean shouldCreateLocally = targetServer.isBlank()
             || localServer.isBlank()
@@ -2178,6 +2521,11 @@ public final class GuiManager {
         return out;
     }
 
+    /** Öffentlicher Wrapper für Tab-Completion (z.B. /nav create &lt;world-type&gt; &lt;server-id&gt;). */
+    public List<String> listAllowedServerNames() {
+        return resolveAllowedServerNames();
+    }
+
     private void connectPlayerToWorldServer(Player player, WorldEntry entry) {
         String targetServer = entry.serverName();
         if (targetServer == null || targetServer.isBlank()) {
@@ -2248,25 +2596,7 @@ public final class GuiManager {
     }
 
     private GameMode resolvePreferredGameMode(Player player, WorldEntry entry) {
-        if (player.hasPermission(Permissions.ADMIN)) {
-            return GameMode.CREATIVE;
-        }
-
-        String orderId = null;
-        if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
-            orderId = entry.ticketOrderId().trim().toUpperCase(Locale.ROOT);
-        } else if (entry.orderLabel() != null && !entry.orderLabel().isBlank()) {
-            orderId = entry.orderLabel().trim().toUpperCase(Locale.ROOT);
-        }
-
-        if (orderId != null && ORDER_LABEL_PATTERN.matcher(orderId).matches()) {
-            WorldsRepository.OrderAssignmentCheck orderCheck = repository.checkOrderAssignment(orderId, player.getName());
-            if (orderCheck.assigned()) {
-                return GameMode.CREATIVE;
-            }
-        }
-
-        return GameMode.SURVIVAL;
+        return GameMode.CREATIVE;
     }
 
     private String resolveContextWorld(Player player) {

@@ -40,7 +40,11 @@ public final class NavCommand implements TabExecutor {
         switch (sub) {
             case "create" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav create <ticketId>");
+                    player.sendMessage("Usage: /nav create <ticketId>  ODER  /nav create <world-type> <server-id>");
+                    return true;
+                }
+                if (args.length >= 3) {
+                    guiManager.executeNavCreateWizard(player, args[1], args[2]);
                     return true;
                 }
                 guiManager.executeNavTicketCreate(player, args[1]);
@@ -257,7 +261,10 @@ public final class NavCommand implements TabExecutor {
                 return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[1]);
             }
             if (sub.equals("create")) {
-                return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[1]);
+                List<String> suggestions = new ArrayList<>(guiManager.listOpenTicketOrderIds((Player) sender));
+                suggestions.add("VOID");
+                suggestions.add("FLAT");
+                return filterPrefix(suggestions, args[1]);
             }
         }
 
@@ -305,6 +312,9 @@ public final class NavCommand implements TabExecutor {
                 return List.of("<material>");
             }
             if (sub.equals("create")) {
+                if (args[1].equalsIgnoreCase("VOID") || args[1].equalsIgnoreCase("FLAT")) {
+                    return filterPrefix(guiManager.listAllowedServerNames(), args[2]);
+                }
                 return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[2]);
             }
         }

@@ -8,6 +8,9 @@ import net.clanimg.worldsGUI.command.UnverifyCommand;
 import net.clanimg.worldsGUI.command.VerifyCommand;
 import net.clanimg.worldsGUI.data.WorldsRepository;
 import net.clanimg.worldsGUI.gui.GuiManager;
+import net.clanimg.worldsGUI.guiconfig.GuiConfig;
+import net.clanimg.worldsGUI.guiconfig.GuiConfigException;
+import net.clanimg.worldsGUI.guiconfig.GuiConfigLoader;
 import net.clanimg.worldsGUI.listener.ChatInputListener;
 import net.clanimg.worldsGUI.listener.ConsoleLoginListener;
 import net.clanimg.worldsGUI.listener.InventoryListener;
@@ -63,6 +66,15 @@ public final class WorldsGUI extends JavaPlugin {
         }
 
         guiManager = new GuiManager(this, repository);
+
+        try {
+            GuiConfig guiConfig = GuiConfigLoader.load(this);
+            guiManager.setGuiConfig(guiConfig);
+            getLogger().info("guis.yml geladen: " + guiConfig.all().size() + " GUI(s).");
+        } catch (GuiConfigException ex) {
+            disablePluginWithReason("guis.yml ist ungültig: " + ex.getMessage());
+            return;
+        }
 
         consoleLoginListener = new ConsoleLoginListener();
 
