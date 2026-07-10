@@ -1,6 +1,7 @@
 package net.clanimg.worldsGUI.gui;
 
 import io.papermc.paper.event.player.AsyncChatEvent;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -78,9 +79,18 @@ public final class GuiManager {
     private static final int SETTINGS_SIZE = 36;
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
-    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of("confirm", "create-world", "select-server", "my-worlds");
+    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of(
+        "confirm",
+        "create-world",
+        "select-server",
+        "my-worlds",
+        "invited-worlds",
+        "tickets",
+        "archived-tickets"
+    );
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
+    private static final Pattern GENERATED_WORLD_NAME_PATTERN = Pattern.compile("^.+-(\\d{4})$");
     private static final Pattern LEGACY_CODE_PATTERN = Pattern.compile("(?i)[&§]([0-9A-FK-OR])");
     private static final String FLAT_WORLD_GENERATOR_SETTINGS = "{\"biome\":\"minecraft:plains\",\"features\":false,\"lakes\":false,\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:dirt\",\"height\":64},{\"block\":\"minecraft:grass_block\",\"height\":1}]}";
 
@@ -225,7 +235,7 @@ public final class GuiManager {
             return;
         }
 
-        List<Map<String, String>> items = resolveSlotRangeItems(range.source());
+        List<Map<String, String>> items = resolveSlotRangeItems(range.source(), player, session);
         int slotCount = range.to() - range.from() + 1;
         Material material = resolveMaterial(range.material());
 
@@ -242,11 +252,18 @@ public final class GuiManager {
     }
 
     private void renderAutoContent(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player) {
-        if (!"own-worlds".equalsIgnoreCase(definition.autoContentSource())) {
+        ViewMode mode = switch (holder.guiId()) {
+            case "my-worlds" -> ViewMode.OWN;
+            case "invited-worlds" -> ViewMode.INVITED;
+            case "archived-tickets" -> ViewMode.ARCHIVED;
+            case "tickets" -> ViewMode.PUBLIC;
+            default -> null;
+        };
+        if (mode == null && !"own-worlds".equalsIgnoreCase(definition.autoContentSource())) {
             return;
         }
 
-        List<WorldEntry> worlds = listWorldsFor(player, ViewMode.OWN);
+        List<WorldEntry> worlds = listWorldsFor(player, mode == null ? ViewMode.OWN : mode);
         int worldIndex = 0;
 
         for (int absoluteSlot = 0; absoluteSlot < definition.size(); absoluteSlot++) {
@@ -258,7 +275,7 @@ public final class GuiManager {
             }
 
             WorldEntry entry = worlds.get(worldIndex++);
-            inventory.setItem(absoluteSlot, worldIcon(entry, ViewMode.OWN, player.getWorld().getName()));
+            inventory.setItem(absoluteSlot, worldIcon(entry, mode == null ? ViewMode.OWN : mode, player.getWorld().getName()));
         }
     }
 
@@ -266,7 +283,7 @@ public final class GuiManager {
      * Liefert die dynamischen Werte je generiertem Slot-Range-Item (z.B. server_id/server_name).
      * trusted-players/luckperms-players werden in einem späteren Schritt angebunden.
      */
-    private List<Map<String, String>> resolveSlotRangeItems(String source) {
+    private List<Map<String, String>> resolveSlotRangeItems(String source, Player player, PlayerGuiSession session) {
         if ("servers".equalsIgnoreCase(source)) {
             List<Map<String, String>> items = new ArrayList<>();
             for (String serverName : resolveAllowedServerNames()) {
@@ -312,7 +329,14 @@ public final class GuiManager {
     }
 
     private void handleRuntimeWorldItemClick(Player player, InventoryClickEvent event, RuntimeGuiHolder holder) {
-        if (!"my-worlds".equalsIgnoreCase(holder.guiId())) {
+        ViewMode mode = switch (holder.guiId()) {
+            case "my-worlds" -> ViewMode.OWN;
+            case "invited-worlds" -> ViewMode.INVITED;
+            case "tickets" -> ViewMode.PUBLIC;
+            case "archived-tickets" -> ViewMode.ARCHIVED;
+            default -> null;
+        };
+        if (mode == null) {
             return;
         }
 
@@ -332,7 +356,7 @@ public final class GuiManager {
             return;
         }
 
-        if (event.isRightClick()) {
+        if (event.isRightClick() && mode == ViewMode.OWN) {
             Optional<WorldEntry> entry = repository.findByWorldName(worldName);
             if (entry.isPresent() && entry.get().ownerUuid().equals(player.getUniqueId().toString())) {
                 selectedWorldByPlayer.put(player.getUniqueId(), worldName);
@@ -1044,12 +1068,7 @@ public final class GuiManager {
             return;
         }
 
-        int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
-        String worldName = player.getName() + "-" + nextIndex;
-        if (repository.findByWorldName(worldName).isPresent()) {
-            player.sendMessage("§cDiese Welt existiert bereits, bitte versuche es erneut.");
-            return;
-        }
+        String worldName = generateLocalWorldName(player);
 
         createWorld(player, worldName, null, false, "private", null, List.of(), voidWorld, false, true, normalizedServer);
     }
@@ -1926,8 +1945,7 @@ public final class GuiManager {
     }
 
     private void openCreateOptionsMenu(Player player, int returnPage) {
-        int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
-        String worldName = player.getName() + "-" + nextIndex;
+        String worldName = generateLocalWorldName(player);
         openCreateOptionsMenu(player, worldName, returnPage, false, false);
     }
 
@@ -2054,8 +2072,7 @@ public final class GuiManager {
     }
 
     private void createWorld(Player player) {
-        int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
-        String worldName = player.getName() + "-" + nextIndex;
+        String worldName = generateLocalWorldName(player);
         createWorld(player, worldName, null, false, "private", null, List.of(), false, false, true);
     }
 
@@ -2107,7 +2124,7 @@ public final class GuiManager {
         boolean notifyWhenVisible,
         String requestedServer
     ) {
-        int nextIndex = repository.nextWorldIndex(player.getUniqueId().toString());
+        int nextIndex = resolveMetadataWorldIndex(player, worldName);
         String targetServer = requestedServer != null && !requestedServer.isBlank()
             ? requestedServer.trim()
             : resolveTargetCreationServer();
@@ -2208,6 +2225,38 @@ public final class GuiManager {
                 }
             }
         }.runTaskLater(plugin, 20L);
+    }
+
+    private String generateLocalWorldName(Player player) {
+        for (int attempt = 0; attempt < 200; attempt++) {
+            int localId = ThreadLocalRandom.current().nextInt(1000, 10_000);
+            String worldName = player.getName() + "-" + localId;
+            if (isLocalWorldNameAvailable(worldName)) {
+                return worldName;
+            }
+        }
+
+        int fallbackId = (int) ((System.currentTimeMillis() % 9000L) + 1000L);
+        return player.getName() + "-" + fallbackId;
+    }
+
+    private boolean isLocalWorldNameAvailable(String worldName) {
+        if (worldName == null || worldName.isBlank()) {
+            return false;
+        }
+        if (Bukkit.getWorld(worldName) != null) {
+            return false;
+        }
+        File worldFolder = new File(Bukkit.getWorldContainer(), worldName);
+        return !worldFolder.exists();
+    }
+
+    private int resolveMetadataWorldIndex(Player player, String worldName) {
+        Matcher matcher = GENERATED_WORLD_NAME_PATTERN.matcher(worldName == null ? "" : worldName);
+        if (matcher.matches()) {
+            return Integer.parseInt(matcher.group(1));
+        }
+        return repository.nextWorldIndex(player.getUniqueId().toString());
     }
 
     private WorldCreator buildWorldCreator(String worldName, boolean voidWorld) {

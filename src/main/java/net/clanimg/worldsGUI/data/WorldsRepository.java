@@ -14,18 +14,23 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import net.clanimg.worldsGUI.model.WorldEntry;
 import org.bukkit.Location;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class WorldsRepository {
+    private static final long WARNING_COOLDOWN_MS = 30_000L;
+
     private final JavaPlugin plugin;
     private final String apiBaseUrl;
     private final String apiToken;
     private final HttpClient httpClient;
     private final Duration requestTimeout;
     private final Gson gson;
+    private final Map<String, Long> warningCooldowns = new ConcurrentHashMap<>();
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
@@ -82,13 +87,13 @@ public final class WorldsRepository {
             String path = "/worlds/next-index?ownerUuid=" + encode(ownerUuid);
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("nextWorldIndex API Fehler: HTTP " + response.statusCode());
+                warnThrottled("nextWorldIndex", "nextWorldIndex API Fehler: HTTP " + response.statusCode());
                 return 1;
             }
             JsonObject json = parseObject(response.body());
             return getInt(json, "nextIndex", 1);
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Ermitteln des Weltindex via API: " + ex.getMessage());
+            warnThrottled("nextWorldIndex-ex", "Fehler beim Ermitteln des Weltindex via API: " + ex.getMessage());
             return 1;
         }
     }
@@ -196,14 +201,15 @@ public final class WorldsRepository {
                     // Duplicate/exists can happen on retries and should be treated as idempotent success.
                     return true;
                 }
-                plugin.getLogger().warning(
+                warnThrottled(
+                    "post-worlds-status",
                     "POST /worlds fehlgeschlagen: HTTP " + status + " body=" + abbreviate(response.body(), 280)
                 );
                 return false;
             }
             return true;
         } catch (Exception ex) {
-            plugin.getLogger().warning("POST /worlds fehlgeschlagen: " + ex.getMessage());
+            warnThrottled("post-worlds-ex", "POST /worlds fehlgeschlagen: " + ex.getMessage());
             return false;
         }
     }
@@ -350,7 +356,7 @@ public final class WorldsRepository {
                 return Optional.empty();
             }
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("findByWorldName API Fehler: HTTP " + response.statusCode());
+                warnThrottled("findByWorldName", "findByWorldName API Fehler: HTTP " + response.statusCode());
                 return Optional.empty();
             }
             JsonObject json = parseObject(response.body());
@@ -362,7 +368,7 @@ public final class WorldsRepository {
             }
             return Optional.of(mapEntry(world));
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Laden der Weltdaten via API: " + ex.getMessage());
+            warnThrottled("findByWorldName-ex", "Fehler beim Laden der Weltdaten via API: " + ex.getMessage());
             return Optional.empty();
         }
     }
@@ -454,10 +460,10 @@ public final class WorldsRepository {
         try {
             ApiResponse response = request("PUT", "/worlds/presence", gson.toJson(body));
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("Presence API Fehler: HTTP " + response.statusCode());
+                warnThrottled("presence", "Presence API Fehler: HTTP " + response.statusCode());
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Aktualisieren der Presence via API: " + ex.getMessage());
+            warnThrottled("presence-ex", "Fehler beim Aktualisieren der Presence via API: " + ex.getMessage());
         }
     }
 
@@ -467,7 +473,7 @@ public final class WorldsRepository {
             String path = "/worlds/join-requests/pending?limit=" + Math.max(1, limit);
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("JoinRequest API Fehler: HTTP " + response.statusCode());
+                warnThrottled("join-requests", "JoinRequest API Fehler: HTTP " + response.statusCode());
                 return requests;
             }
 
@@ -487,7 +493,7 @@ public final class WorldsRepository {
                 ));
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
+            warnThrottled("join-requests-ex", "Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
         }
         return requests;
     }
@@ -508,7 +514,7 @@ public final class WorldsRepository {
         try {
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("Fehler beim Laden " + label + " via API: HTTP " + response.statusCode());
+                warnThrottled("list-worlds:" + label, "Fehler beim Laden " + label + " via API: HTTP " + response.statusCode());
                 return entries;
             }
 
@@ -522,9 +528,19 @@ public final class WorldsRepository {
                 }
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Laden " + label + " via API: " + ex.getMessage());
+            warnThrottled("list-worlds-ex:" + label, "Fehler beim Laden " + label + " via API: " + ex.getMessage());
         }
         return entries;
+    }
+
+    private void warnThrottled(String key, String message) {
+        long now = System.currentTimeMillis();
+        long nextAllowed = warningCooldowns.getOrDefault(key, 0L);
+        if (nextAllowed > now) {
+            return;
+        }
+        warningCooldowns.put(key, now + WARNING_COOLDOWN_MS);
+        plugin.getLogger().warning(message);
     }
 
     private void postOrWarn(String path, JsonObject body) {
