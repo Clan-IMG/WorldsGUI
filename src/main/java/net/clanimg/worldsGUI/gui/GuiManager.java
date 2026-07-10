@@ -78,7 +78,7 @@ public final class GuiManager {
     private static final int SETTINGS_SIZE = 36;
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
-    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of("confirm", "create-world", "select-server");
+    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of("confirm", "create-world", "select-server", "my-worlds");
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
     private static final Pattern LEGACY_CODE_PATTERN = Pattern.compile("(?i)[&§]([0-9A-FK-OR])");
@@ -170,10 +170,6 @@ public final class GuiManager {
             openRuntimeGui(player, normalized);
             return;
         }
-        if ("my-worlds".equals(normalized)) {
-            openMainMenu(player, ViewMode.OWN, 0);
-            return;
-        }
         plugin.getLogger().warning("GUI '" + guiId + "' wird von der neuen guis.yml-Engine noch nicht unterstützt.");
     }
 
@@ -191,12 +187,14 @@ public final class GuiManager {
 
         GuiDefinition definition = definitionOpt.get();
         PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        session.setCurrentGuiId(guiId);
 
         RuntimeGuiHolder holder = new RuntimeGuiHolder(guiId);
         Inventory inventory = Bukkit.createInventory(holder, definition.size(), parseFormattedMessage(definition.title()));
 
         renderRowSlots(inventory, holder, definition, player, session);
         renderSlotRange(inventory, holder, definition, player, session);
+        renderAutoContent(inventory, holder, definition, player);
 
         player.openInventory(inventory);
     }
@@ -243,6 +241,27 @@ public final class GuiManager {
         }
     }
 
+    private void renderAutoContent(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player) {
+        if (!"own-worlds".equalsIgnoreCase(definition.autoContentSource())) {
+            return;
+        }
+
+        List<WorldEntry> worlds = listWorldsFor(player, ViewMode.OWN);
+        int worldIndex = 0;
+
+        for (int absoluteSlot = 0; absoluteSlot < definition.size(); absoluteSlot++) {
+            if (inventory.getItem(absoluteSlot) != null) {
+                continue;
+            }
+            if (worldIndex >= worlds.size()) {
+                break;
+            }
+
+            WorldEntry entry = worlds.get(worldIndex++);
+            inventory.setItem(absoluteSlot, worldIcon(entry, ViewMode.OWN, player.getWorld().getName()));
+        }
+    }
+
     /**
      * Liefert die dynamischen Werte je generiertem Slot-Range-Item (z.B. server_id/server_name).
      * trusted-players/luckperms-players werden in einem späteren Schritt angebunden.
@@ -279,6 +298,7 @@ public final class GuiManager {
 
         RuntimeGuiHolder.ClickHandler clickHandler = holder.clickHandler(slot);
         if (clickHandler == null || clickHandler.action() == null) {
+            handleRuntimeWorldItemClick(player, event, holder);
             return;
         }
 
@@ -291,11 +311,41 @@ public final class GuiManager {
         triggerDispatcher.execute(player, session, trigger, clickHandler.extra(), holder.guiId() + ":" + slot);
     }
 
+    private void handleRuntimeWorldItemClick(Player player, InventoryClickEvent event, RuntimeGuiHolder holder) {
+        if (!"my-worlds".equalsIgnoreCase(holder.guiId())) {
+            return;
+        }
+
+        ItemStack clicked = event.getCurrentItem();
+        if (clicked == null || clicked.getType() == Material.AIR || !clicked.hasItemMeta()) {
+            return;
+        }
+
+        ItemMeta meta = clicked.getItemMeta();
+        String worldName = meta.getPersistentDataContainer().get(worldKey, PersistentDataType.STRING);
+        if (worldName == null || worldName.isBlank()) {
+            return;
+        }
+
+        if (event.isLeftClick()) {
+            joinWorld(player, worldName, true);
+            return;
+        }
+
+        if (event.isRightClick()) {
+            Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+            if (entry.isPresent() && entry.get().ownerUuid().equals(player.getUniqueId().toString())) {
+                selectedWorldByPlayer.put(player.getUniqueId(), worldName);
+                openSettingsMenu(player, worldName, 0);
+            }
+        }
+    }
+
     public void executeNav(Player player) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV, true)) {
             return;
         }
-        openMainMenu(player, ViewMode.OWN, 0);
+        openGui(player, "my-worlds");
         syncAssignedTicketWorlds(player);
     }
 
@@ -1582,7 +1632,7 @@ public final class GuiManager {
         selectedWorldByPlayer.put(player.getUniqueId(), worldName);
 
         switch (slot) {
-            case 27 -> openMainMenu(player, ViewMode.OWN, holder.returnPage());
+            case 27 -> openGui(player, "my-worlds");
             case 10 -> {
                 repository.setPublic(worldName, !entry.isPublic());
                 openSettingsMenu(player, worldName, holder.returnPage());
@@ -1608,7 +1658,7 @@ public final class GuiManager {
                     return;
                 }
                 deleteWorld(player, worldName);
-                openMainMenu(player, ViewMode.OWN, 0);
+                openGui(player, "my-worlds");
             }
             case 16 -> send(player, "setspawn-help");
             default -> {
@@ -1835,7 +1885,7 @@ public final class GuiManager {
 
                 if (entryOpt.isEmpty()) {
                     send(onlinePlayer, "world-not-found");
-                    openMainMenu(onlinePlayer, ViewMode.OWN, 0);
+                    openGui(onlinePlayer, "my-worlds");
                     return;
                 }
 
@@ -1938,7 +1988,7 @@ public final class GuiManager {
         switch (slot) {
             case 11 -> openCreateOptionsMenu(player, holder.worldName(), holder.returnPage(), !holder.voidWorld(), holder.chunkyEnabled());
             case 15 -> openCreateOptionsMenu(player, holder.worldName(), holder.returnPage(), holder.voidWorld(), !holder.chunkyEnabled());
-            case 22 -> openMainMenu(player, ViewMode.OWN, holder.returnPage());
+            case 22 -> openGui(player, "my-worlds");
             case 13 -> {
                 if (holder.voidWorld() && Bukkit.getPluginManager().getPlugin("VoidGen") == null) {
                     player.sendMessage("§cVoidGen wurde nicht gefunden. Void-Welten können aktuell nicht erstellt werden.");
@@ -2088,7 +2138,7 @@ public final class GuiManager {
 
             if (notifyWhenVisible) {
                 player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst verbunden, sobald sie dort sichtbar ist.");
-                openMainMenu(player, ViewMode.OWN, 0);
+                openGui(player, "my-worlds");
             }
             return;
         }
@@ -2154,7 +2204,7 @@ public final class GuiManager {
                 }
                 if (notifyWhenVisible) {
                     player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst teleportiert, sobald sie dort sichtbar ist.");
-                    openMainMenu(player, ViewMode.OWN, 0);
+                    openGui(player, "my-worlds");
                 }
             }
         }.runTaskLater(plugin, 20L);
@@ -2242,7 +2292,7 @@ public final class GuiManager {
                         if (online != null && online.isOnline()) {
                             if (notifyWhenVisible) {
                                 online.sendMessage("§aDeine Welt §f" + worldName + " §aist jetzt im GUI sichtbar.");
-                                openMainMenu(online, ViewMode.OWN, 0);
+                                openGui(online, "my-worlds");
                                 joinWorld(online, worldName, false);
                                 online.sendMessage("§aDu wurdest automatisch zur neuen Welt bzw. auf den Zielserver verbunden.");
                             }
