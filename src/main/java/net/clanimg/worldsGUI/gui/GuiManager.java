@@ -2148,7 +2148,7 @@ public final class GuiManager {
         String localServer = resolveLocalServerId();
         boolean shouldCreateLocally = targetServer.isBlank()
             || localServer.isBlank()
-            || targetServer.equalsIgnoreCase(localServer);
+            || isSameServerIdentifier(targetServer, localServer);
 
         if (!shouldCreateLocally) {
             player.sendMessage("§7Dieser Server ist nicht in api.allowed-server-names.");
@@ -2549,6 +2549,11 @@ public final class GuiManager {
             return true;
         }
 
+        return joinWorldLocally(player, entry, notify);
+    }
+
+    private boolean joinWorldLocally(Player player, WorldEntry entry, boolean notify) {
+        String worldName = entry.worldName();
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
@@ -2579,11 +2584,46 @@ public final class GuiManager {
         if (localServer == null || localServer.isBlank()) {
             return false;
         }
-        return worldServer.trim().equalsIgnoreCase(localServer.trim());
+        return isSameServerIdentifier(worldServer, localServer);
+    }
+
+    private boolean isSameServerIdentifier(String left, String right) {
+        String a = normalizeServerIdentifier(left);
+        String b = normalizeServerIdentifier(right);
+        if (a.isBlank() || b.isBlank()) {
+            return false;
+        }
+        if (a.equalsIgnoreCase(b)) {
+            return true;
+        }
+
+        String aBase = stripInstanceSuffix(a);
+        String bBase = stripInstanceSuffix(b);
+        return !aBase.isBlank() && aBase.equalsIgnoreCase(bBase);
+    }
+
+    private String normalizeServerIdentifier(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim();
+    }
+
+    private String stripInstanceSuffix(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replaceFirst("[-_](\\d+)$", "");
     }
 
     private String resolveLocalServerId() {
+        String configuredLocalServer = plugin.getConfig().getString("api.local-server-name", "");
+        if (configuredLocalServer != null && !configuredLocalServer.isBlank()) {
+            return configuredLocalServer.trim();
+        }
+
         for (String envKey : List.of(
+            "SIMPLECLOUD_SERVER_NAME",
             "SIMPLECLOUD_SERVER_ID",
             "SIMPLECLOUD_SERVICE_NAME",
             "CLOUDNET_SERVICE_NAME",
@@ -2664,6 +2704,7 @@ public final class GuiManager {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
+            boolean alreadyConnected = false;
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(endpoint))
@@ -2686,16 +2727,27 @@ public final class GuiManager {
                     if (detail == null || detail.isBlank()) {
                         detail = "Transfer fehlgeschlagen (HTTP " + response.statusCode() + ")";
                     }
-                    message = "§cServer-Wechsel fehlgeschlagen: §f" + detail;
+                    String normalizedDetail = detail.toLowerCase(Locale.ROOT);
+                    alreadyConnected = normalizedDetail.contains("already connected")
+                        && normalizedDetail.contains("this server");
+                    if (alreadyConnected) {
+                        message = "§7Du bist bereits auf diesem Server. Lokaler Welten-Join wird versucht ...";
+                    } else {
+                        message = "§cServer-Wechsel fehlgeschlagen: §f" + detail;
+                    }
                 }
             } catch (Exception ex) {
                 message = "§cServer-Wechsel fehlgeschlagen: §f" + ex.getMessage();
             }
 
             String finalMessage = message;
+            boolean shouldTryLocalJoin = alreadyConnected;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (player.isOnline()) {
                     player.sendMessage(finalMessage);
+                    if (shouldTryLocalJoin) {
+                        joinWorldLocally(player, entry, true);
+                    }
                 }
             });
         });

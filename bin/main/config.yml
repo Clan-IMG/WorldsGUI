@@ -14,6 +14,11 @@ api:
     - "build"
     - "dev"
 
+  # Optional override für die lokale Server-ID.
+  # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
+  # von den Einträgen in allowed-server-names abweicht.
+  local-server-name: ""
+
 luckperms:
   group-team: "team"
   group-kunde: "kunde"
