@@ -193,7 +193,7 @@ guis:
       slot-5:
         material: "BARRIER"
         title: "Bestätigen"
-        clicks: 3
+        clicks: 1
         action:
           trigger: "command"
           command: "%confirm-command%"

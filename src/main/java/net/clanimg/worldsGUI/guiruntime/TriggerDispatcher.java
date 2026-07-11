@@ -54,6 +54,8 @@ public final class TriggerDispatcher {
             player.sendMessage("§cDieser Command konnte nicht ausgeführt werden (fehlender Wert).");
             return;
         }
+
+        player.closeInventory();
         commandDispatcher.dispatch(player, expanded);
     }
 

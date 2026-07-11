@@ -10,13 +10,14 @@ api:
   profile-base-url: "https://api.clan-img.net"
   profile-token: ""
 
-  allowed-server-names:
-    - "build"
-    - "dev"
+  # Optionale Blacklist für Ziel-Server.
+  # Standard: alle online Server aus SimpleCloud sind erlaubt/werden angezeigt.
+  # Nur hier eintragen, wenn einzelne Server NICHT auswählbar sein sollen.
+  blocked-server-names: []
 
   # Optional override für die lokale Server-ID.
   # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
-  # von den Einträgen in allowed-server-names abweicht.
+  # von den Server-IDs aus SimpleCloud abweicht.
   local-server-name: ""
 
 luckperms:

@@ -102,6 +102,7 @@ public final class GuiManager {
         "create-world",
         "select-server",
         "my-worlds",
+        "edit-world",
         "invited-worlds",
         "invited-friends",
         "trusted-friends",
@@ -465,7 +466,9 @@ public final class GuiManager {
             Optional<WorldEntry> entry = repository.findByWorldName(worldName);
             if (entry.isPresent() && entry.get().ownerUuid().equals(player.getUniqueId().toString())) {
                 selectedWorldByPlayer.put(player.getUniqueId(), worldName);
-                openSettingsMenu(player, worldName, 0);
+                PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+                session.setCurrentWorld(worldName);
+                openGui(player, "edit-world");
             }
         }
     }
@@ -1411,8 +1414,8 @@ public final class GuiManager {
             return;
         }
 
-        List<String> allowedServers = resolveAllowedServerNames();
-        if (!allowedServers.isEmpty() && allowedServers.stream().noneMatch(server -> server.equalsIgnoreCase(normalizedServer))) {
+        List<String> selectableServers = resolveSelectableServerNames();
+        if (!selectableServers.isEmpty() && selectableServers.stream().noneMatch(server -> server.equalsIgnoreCase(normalizedServer))) {
             player.sendMessage("§cUnbekannter Server: §f" + normalizedServer);
             return;
         }
@@ -2653,7 +2656,7 @@ public final class GuiManager {
             || isSameServerIdentifier(targetServer, localServer);
 
         if (!shouldCreateLocally) {
-            player.sendMessage("§7Dieser Server ist nicht in api.allowed-server-names.");
+            player.sendMessage("§7Die Welt wird auf einem anderen Online-Server erstellt.");
             player.sendMessage("§7Die Welt wird auf §f" + targetServer + " §7erstellt und du wirst dorthin verbunden.");
 
             persistWorldMetadataWithRetry(
@@ -3258,22 +3261,22 @@ public final class GuiManager {
 
     private String resolveTargetCreationServer() {
         String localServer = resolveLocalServerId();
-        List<String> allowedServers = resolveAllowedServerNames();
-        if (allowedServers.isEmpty()) {
+        List<String> selectableServers = resolveSelectableServerNames();
+        if (selectableServers.isEmpty()) {
             return localServer == null ? "" : localServer;
         }
 
-        for (String allowed : allowedServers) {
-            if (allowed.equalsIgnoreCase(localServer)) {
+        for (String selectable : selectableServers) {
+            if (selectable.equalsIgnoreCase(localServer)) {
                 return localServer;
             }
         }
 
-        return allowedServers.get(0);
+        return selectableServers.get(0);
     }
 
-    private List<String> resolveAllowedServerNames() {
-        List<String> configured = plugin.getConfig().getStringList("api.allowed-server-names");
+    private List<String> resolveConfiguredBlockedServerNames() {
+        List<String> configured = plugin.getConfig().getStringList("api.blocked-server-names");
         List<String> out = new ArrayList<>();
         for (String value : configured) {
             if (value == null) {
@@ -3288,40 +3291,41 @@ public final class GuiManager {
     }
 
     private List<String> resolveSelectableServerNames() {
-        List<String> allowedServers = resolveAllowedServerNames();
-        if (allowedServers.isEmpty()) {
-            String local = resolveLocalServerId();
-            return local == null || local.isBlank() ? List.of() : List.of(local);
-        }
-
         Optional<Set<String>> onlineIdentifiersOpt = fetchOnlineServerIdentifiers();
-        if (onlineIdentifiersOpt.isEmpty()) {
-            return allowedServers;
-        }
+        List<String> blockedServers = resolveConfiguredBlockedServerNames();
 
-        Set<String> onlineIdentifiers = onlineIdentifiersOpt.get();
-        List<String> visible = new ArrayList<>();
-        for (String allowed : allowedServers) {
-            boolean online = onlineIdentifiers.stream().anyMatch(onlineId -> isSameServerIdentifier(allowed, onlineId));
-            if (online) {
-                visible.add(allowed);
+        if (onlineIdentifiersOpt.isPresent()) {
+            Set<String> onlineIdentifiers = onlineIdentifiersOpt.get();
+            List<String> allOnline = new ArrayList<>(onlineIdentifiers);
+            allOnline.sort(String.CASE_INSENSITIVE_ORDER);
+
+            if (!allOnline.isEmpty() && blockedServers.isEmpty()) {
+                return allOnline;
             }
-        }
 
-        if (!visible.isEmpty()) {
-            return visible;
-        }
-
-        String local = resolveLocalServerId();
-        if (local != null && !local.isBlank()) {
-            for (String allowed : allowedServers) {
-                if (isSameServerIdentifier(allowed, local)) {
-                    return List.of(allowed);
+            List<String> visible = new ArrayList<>();
+            for (String online : allOnline) {
+                boolean blocked = blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, online));
+                if (!blocked) {
+                    visible.add(online);
                 }
             }
+            if (!visible.isEmpty()) {
+                return visible;
+            }
         }
 
-        return List.of();
+        return resolveFallbackServerNames(blockedServers);
+    }
+
+    private List<String> resolveFallbackServerNames(List<String> blockedServers) {
+        String local = resolveLocalServerId();
+        if (local == null || local.isBlank()) {
+            return List.of();
+        }
+
+        boolean localBlocked = blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, local));
+        return localBlocked ? List.of() : List.of(local);
     }
 
     private Optional<Set<String>> fetchOnlineServerIdentifiers() {
@@ -3426,7 +3430,7 @@ public final class GuiManager {
 
     /** Öffentlicher Wrapper für Tab-Completion (z.B. /nav create &lt;world-type&gt; &lt;server-id&gt;). */
     public List<String> listAllowedServerNames() {
-        return resolveAllowedServerNames();
+        return resolveSelectableServerNames();
     }
 
     private void connectPlayerToWorldServer(Player player, WorldEntry entry) {
