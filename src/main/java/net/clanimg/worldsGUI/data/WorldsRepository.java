@@ -377,8 +377,10 @@ public final class WorldsRepository {
         return listWorlds("/worlds/owner/" + encode(ownerUuid), "eigener Welten");
     }
 
-    public List<WorldEntry> listDiscoverableWorlds(String viewerUuid, boolean admin) {
-        String path = "/worlds/discoverable?viewerUuid=" + encode(viewerUuid) + "&admin=" + admin;
+    public List<WorldEntry> listDiscoverableWorlds(String viewerUuid, String viewerMinecraftName, boolean admin) {
+        String path = "/worlds/discoverable?viewerUuid=" + encode(viewerUuid)
+            + "&viewerMinecraftName=" + encode(viewerMinecraftName == null ? "" : viewerMinecraftName)
+            + "&admin=" + admin;
         return listWorlds(path, "öffentlicher Welten");
     }
 

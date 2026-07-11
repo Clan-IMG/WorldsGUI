@@ -358,13 +358,12 @@ guis:
         action:
           trigger: "return"
 
-  # Zeigt bereits für %world% getrustete Spieler als Köpfe an
-  # (source: trusted-players, WELT-spezifisch, nicht global).
-  # Rechtsklick entfernt den Trust sofort - kein confirm-Zwischenschritt,
-  # da untrust jederzeit reversibel ist (erneutes Einladen möglich).
+  # Zeigt bereits für %world% eingeladene Spieler als Köpfe an
+  # (source: invited-players, WELT-spezifisch, nicht global).
+  # Rechtsklick entfernt die Einladung sofort.
   invited-friends:
     gui-size: 54
-    title: "Freunde einladen"
+    title: "Freunde ansehen"
     position: bottom # Zeilen-Notation (slot-1/slot-9) liegt hier auf echten Slots 45-53
     slots:
       slot-1:
@@ -374,7 +373,7 @@ guis:
           trigger: "return"
       slot-9:
         material: "ANVIL"
-        title: "Freund suchen"
+        title: "Spieler suchen"
         action:
           trigger: "anvil-input"
           anvil-title: "Spielername eingeben"
@@ -383,20 +382,50 @@ guis:
       slot-range:
         from: 0
         to: 44 # endet bewusst VOR slot-1/slot-9 (45-53), keine Kollision
-        source: "trusted-players" # nur Spieler, die für DIESE Welt (%world%) bereits getrustet sind
+        source: "invited-players" # nur Spieler, die für DIESE Welt (%world%) bereits eingeladen sind
+        material: "%player_head%"
+        title: "%target_player_name%"
+        action:
+          right-click:
+            trigger: "command"
+            command: "nav customer remove %world% %target_player_name%"
+            # kein left-click definiert: Linksklick auf bereits eingeladene Spieler tut bewusst nichts.
+
+  # Zeigt bereits für %world% zum Bauen berechtigte Spieler als Köpfe an.
+  # Rechtsklick entfernt die Bau-Berechtigung sofort.
+  trusted-friends:
+    gui-size: 54
+    title: "Bauzugriff verwalten"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-9:
+        material: "ANVIL"
+        title: "Spieler suchen"
+        action:
+          trigger: "anvil-input"
+          anvil-title: "Spielername eingeben"
+          gui-id: "select-friend"
+          param-key: "search"
+      slot-range:
+        from: 0
+        to: 44
+        source: "trusted-players"
         material: "%player_head%"
         title: "%target_player_name%"
         action:
           right-click:
             trigger: "command"
             command: "nav my-world untrust %world% %target_player_name%"
-            # kein left-click definiert: Linksklick auf bereits eingeladene
-            # Spieler tut hier bewusst nichts (verhindert Versehen-Klicks)
 
   # Zeigt ALLE auf dem Server registrierten Spieler (laut LuckPerms),
   # gefiltert nach dem in invited-friends eingegebenen Suchbegriff.
-  # Linksklick fügt den Spieler sofort hinzu (kein confirm nötig,
-  # da trust jederzeit reversibel ist über invited-friends/untrust).
+  # Linksklick fügt den Spieler als Sichtzugriff hinzu.
+  # Rechtsklick vergibt Bau-Rechte.
   select-friend:
     gui-size: 54
     title: "Spieler auswählen"
@@ -416,5 +445,8 @@ guis:
         title: "%target_player_name%"
         action:
           left-click:
+            trigger: "command"
+            command: "nav customer invite %world% %target_player_name%"
+          right-click:
             trigger: "command"
             command: "nav my-world trust %world% %target_player_name%"

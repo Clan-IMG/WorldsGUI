@@ -9,6 +9,7 @@ public record GuiSlotRangeDefinition(
     int from,
     int to,
     String source,
+    String filter,
     String material,
     String title,
     GuiAction action

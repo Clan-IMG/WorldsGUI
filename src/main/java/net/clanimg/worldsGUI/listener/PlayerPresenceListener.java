@@ -27,6 +27,7 @@ public final class PlayerPresenceListener implements Listener {
         Player player = event.getPlayer();
         updatePresence(player.getName(), player.getWorld().getName(), true);
         guiManager.notifyCustomerActiveTicketOnJoin(player);
+        Bukkit.getScheduler().runTask(plugin, () -> guiManager.ensurePersonalFlatWorldForJoin(player));
     }
 
     @EventHandler

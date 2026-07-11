@@ -7,10 +7,13 @@ plugins {
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
+    maven("https://maven.enginehub.org/repo/")
 }
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+    compileOnly("com.sk89q.worldguard:worldguard-bukkit:7.0.17")
+    compileOnly("com.sk89q.worldedit:worldedit-bukkit:7.3.18")
     implementation("com.google.code.gson:gson:2.11.0")
 }
 

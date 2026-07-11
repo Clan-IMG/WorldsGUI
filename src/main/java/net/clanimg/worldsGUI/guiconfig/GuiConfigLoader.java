@@ -195,6 +195,7 @@ public final class GuiConfigLoader {
         }
 
         String source = section.getString("source");
+        String filter = section.getString("filter");
         String material = section.getString("material", DEFAULT_MATERIAL);
         String title = section.getString("title", "");
         GuiAction action = null;
@@ -204,7 +205,7 @@ public final class GuiConfigLoader {
             action = parseAction(guiId, SLOT_RANGE_KEY, actionSection, errors, warnings);
         }
 
-        return new GuiSlotRangeDefinition(from, to, source, material, title, action);
+        return new GuiSlotRangeDefinition(from, to, source, filter, material, title, action);
     }
 
     private static GuiAction parseAction(String guiId, String slotKey, ConfigurationSection actionSection, List<String> errors, List<String> warnings) {
