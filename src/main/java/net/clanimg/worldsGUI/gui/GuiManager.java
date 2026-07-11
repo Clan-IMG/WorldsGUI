@@ -20,6 +20,8 @@ import java.util.regex.Pattern;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -88,12 +90,13 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
 public final class GuiManager {
     private static final int MAIN_SIZE = 54;
-    private static final int SETTINGS_SIZE = 36;
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
     private static final int WORLD_BORDER_BLOCKS = 29_999_984;
@@ -244,8 +247,7 @@ public final class GuiManager {
             }
 
             String title = PlaceholderExpander.expand(slotDefinition.title(), player, session, Map.of());
-            Material material = resolveMaterial(slotDefinition.material());
-            inventory.setItem(absolute, namedItem(material, title == null ? "" : title));
+            inventory.setItem(absolute, buildRuntimeItem(slotDefinition.material(), title == null ? "" : title, player, Map.of()));
 
             if (slotDefinition.action() != null) {
                 holder.putClickHandler(absolute, slotDefinition.action(), Map.of());
@@ -261,13 +263,11 @@ public final class GuiManager {
 
         List<Map<String, String>> items = resolveSlotRangeItems(range, player, session);
         int slotCount = range.to() - range.from() + 1;
-        Material material = resolveMaterial(range.material());
-
         for (int i = 0; i < slotCount && i < items.size(); i++) {
             int absolute = range.from() + i;
             Map<String, String> extra = items.get(i);
             String title = PlaceholderExpander.expand(range.title(), player, session, extra);
-            inventory.setItem(absolute, namedItem(material, title == null ? "" : title));
+            inventory.setItem(absolute, buildRuntimeItem(range.material(), title == null ? "" : title, player, extra));
 
             if (range.action() != null) {
                 holder.putClickHandler(absolute, range.action(), extra);
@@ -410,6 +410,44 @@ public final class GuiManager {
             return Material.STONE;
         }
         return material;
+    }
+
+    private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, Map<String, String> extra) {
+        String token = materialTemplate == null ? "" : materialTemplate.trim();
+        if ("%player_head%".equalsIgnoreCase(token)) {
+            return buildPlayerHeadItem(title, player, extra);
+        }
+
+        Material material = resolveMaterial(materialTemplate);
+        return namedItem(material, title);
+    }
+
+    private ItemStack buildPlayerHeadItem(String title, Player player, Map<String, String> extra) {
+        ItemStack item = new ItemStack(Material.PLAYER_HEAD);
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof SkullMeta skullMeta)) {
+            return namedItem(Material.PLAYER_HEAD, title);
+        }
+
+        String targetName = null;
+        if (extra != null) {
+            targetName = firstNonBlank(
+                extra.get("target_player_name"),
+                extra.get("player_name")
+            );
+        }
+        if (targetName == null || targetName.isBlank()) {
+            targetName = player == null ? null : player.getName();
+        }
+
+        if (targetName != null && !targetName.isBlank()) {
+            OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(targetName);
+            skullMeta.setOwningPlayer(cached != null ? cached : Bukkit.getOfflinePlayer(targetName));
+        }
+
+        skullMeta.displayName(legacy(title));
+        item.setItemMeta(skullMeta);
+        return item;
     }
 
     private void handleRuntimeGuiClick(Player player, InventoryClickEvent event, RuntimeGuiHolder holder) {
@@ -1181,7 +1219,10 @@ public final class GuiManager {
         }
 
         trusted.add(normalizedTarget);
-        repository.setTrustedPlayers(worldName, trusted);
+        if (!repository.setTrustedPlayers(worldName, trusted)) {
+            player.sendMessage("§cTrust konnte nicht gespeichert werden (API-Fehler).");
+            return;
+        }
         player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
     }
 
@@ -1214,7 +1255,10 @@ public final class GuiManager {
             return;
         }
 
-        repository.setTrustedPlayers(worldName, trusted);
+        if (!repository.setTrustedPlayers(worldName, trusted)) {
+            player.sendMessage("§cUntrust konnte nicht gespeichert werden (API-Fehler).");
+            return;
+        }
         player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
@@ -1607,14 +1651,17 @@ public final class GuiManager {
 
     public void ensurePersonalFlatWorldForJoin(Player player) {
         String localServer = resolveLocalServerId();
+
+        List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
+        boolean hasEligibleWorld;
         if (localServer.isBlank()) {
-            return;
+            hasEligibleWorld = !ownWorlds.isEmpty();
+        } else {
+            hasEligibleWorld = ownWorlds.stream()
+                .anyMatch(entry -> isSameServerIdentifier(entry.serverName(), localServer));
         }
 
-        boolean hasLocalWorld = repository.listOwnWorlds(player.getUniqueId().toString())
-            .stream()
-            .anyMatch(entry -> isSameServerIdentifier(entry.serverName(), localServer));
-        if (hasLocalWorld) {
+        if (hasEligibleWorld) {
             return;
         }
 
@@ -1731,7 +1778,10 @@ public final class GuiManager {
         }
 
         invited.add(normalizedTarget);
-        repository.setInvitedPlayers(worldName, invited);
+        if (!repository.setInvitedPlayers(worldName, invited)) {
+            player.sendMessage("§cEinladung konnte nicht gespeichert werden (API-Fehler).");
+            return;
+        }
         refreshWorldGuardProtection(worldName);
         player.sendMessage("§aSpieler §f" + normalizedTarget + " §awurde für §f" + worldName + " §aeingeladen.");
     }
@@ -1768,8 +1818,14 @@ public final class GuiManager {
         List<String> trusted = new ArrayList<>(entry.trustedPlayers());
         removeIgnoreCase(trusted, normalizedTarget);
 
-        repository.setInvitedPlayers(worldName, invited);
-        repository.setTrustedPlayers(worldName, trusted);
+        if (!repository.setInvitedPlayers(worldName, invited)) {
+            player.sendMessage("§cEinladung konnte nicht entfernt werden (API-Fehler).");
+            return;
+        }
+        if (!repository.setTrustedPlayers(worldName, trusted)) {
+            player.sendMessage("§cTrust-Status konnte nicht aktualisiert werden (API-Fehler).");
+            return;
+        }
         refreshWorldGuardProtection(worldName);
         player.sendMessage("§aEinladung für §f" + normalizedTarget + " §awurde entfernt.");
     }
@@ -1815,7 +1871,10 @@ public final class GuiManager {
         }
 
         trusted.add(normalizedTarget);
-        repository.setTrustedPlayers(worldName, trusted);
+        if (!repository.setTrustedPlayers(worldName, trusted)) {
+            player.sendMessage("§cTrust konnte nicht gespeichert werden (API-Fehler).");
+            return;
+        }
         refreshWorldGuardProtection(worldName);
         player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
     }
@@ -1855,7 +1914,10 @@ public final class GuiManager {
             return;
         }
 
-        repository.setTrustedPlayers(worldName, trusted);
+        if (!repository.setTrustedPlayers(worldName, trusted)) {
+            player.sendMessage("§cUntrust konnte nicht gespeichert werden (API-Fehler).");
+            return;
+        }
         refreshWorldGuardProtection(worldName);
         player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
@@ -1946,12 +2008,6 @@ public final class GuiManager {
             return;
         }
 
-        if (holder instanceof SettingsHolder settingsHolder) {
-            event.setCancelled(true);
-            handleSettingsClick(player, event, settingsHolder);
-            return;
-        }
-
         if (holder instanceof CreateOptionsHolder createOptionsHolder) {
             event.setCancelled(true);
             handleCreateOptionsClick(player, event, createOptionsHolder);
@@ -1995,8 +2051,19 @@ public final class GuiManager {
             } else if (pending.type() == PendingType.ICON) {
                 applyIcon(player, pending.worldName(), input);
             }
-            openSettingsMenu(player, pending.worldName(), 0);
+            openEditWorldGui(player, pending.worldName());
         });
+    }
+
+    private void openEditWorldGui(Player player, String worldName) {
+        if (player == null || worldName == null || worldName.isBlank()) {
+            return;
+        }
+
+        selectedWorldByPlayer.put(player.getUniqueId(), worldName);
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        session.setCurrentWorld(worldName);
+        openGui(player, "edit-world");
     }
 
     /**
@@ -2136,71 +2203,9 @@ public final class GuiManager {
             Optional<WorldEntry> entry = repository.findByWorldName(worldName);
             if (entry.isPresent() && entry.get().ownerUuid().equals(player.getUniqueId().toString())) {
                 selectedWorldByPlayer.put(player.getUniqueId(), worldName);
-                openSettingsMenu(player, worldName, holder.page());
-            }
-        }
-    }
-
-    private void handleSettingsClick(Player player, InventoryClickEvent event, SettingsHolder holder) {
-        int slot = event.getRawSlot();
-        if (slot < 0 || slot >= SETTINGS_SIZE) {
-            return;
-        }
-
-        String worldName = holder.worldName();
-        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
-        if (entryOpt.isEmpty()) {
-            send(player, "world-not-found");
-            player.closeInventory();
-            return;
-        }
-
-        WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString())) {
-            send(player, "not-world-owner");
-            player.closeInventory();
-            return;
-        }
-
-        selectedWorldByPlayer.put(player.getUniqueId(), worldName);
-
-        switch (slot) {
-            case 27 -> openGui(player, "my-worlds");
-            case 10 -> {
-                repository.setPublic(worldName, !entry.isPublic());
-                openSettingsMenu(player, worldName, holder.returnPage());
-                send(player, !entry.isPublic() ? "set-public" : "set-private");
-            }
-            case 12 -> {
-                openGui(player, "invited-friends");
-            }
-            case 13 -> {
-                openGui(player, "trusted-friends");
-            }
-            case 14 -> {
-                if (!hasPermission(player, Permissions.RENAME, true)) {
-                    return;
-                }
-                pendingInputs.put(player.getUniqueId(), new PendingInput(PendingType.RENAME, worldName));
-                player.closeInventory();
-                send(player, "rename-prompt");
-            }
-            case 16 -> {
-                if (!hasPermission(player, Permissions.ICON, true)) {
-                    return;
-                }
-                openIconSelectorMenu(player, worldName, holder.returnPage());
-            }
-            case 18 -> send(player, "setspawn-help");
-            case 20 -> {
-                if (!event.isShiftClick()) {
-                    send(player, "delete-confirm");
-                    return;
-                }
-                deleteWorld(player, worldName);
-                openGui(player, "my-worlds");
-            }
-            default -> {
+                PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+                session.setCurrentWorld(worldName);
+                openGui(player, "edit-world");
             }
         }
     }
@@ -2412,60 +2417,6 @@ public final class GuiManager {
         return inv;
     }
 
-    private void openSettingsMenu(Player player, String worldName, int returnPage) {
-        UUID playerId = player.getUniqueId();
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                Player onlinePlayer = Bukkit.getPlayer(playerId);
-                if (onlinePlayer == null || !onlinePlayer.isOnline()) {
-                    return;
-                }
-
-                if (entryOpt.isEmpty()) {
-                    send(onlinePlayer, "world-not-found");
-                    openGui(onlinePlayer, "my-worlds");
-                    return;
-                }
-
-                WorldEntry entry = entryOpt.get();
-                Inventory inv = buildWorldOverviewMenu(worldName, returnPage, entry);
-                onlinePlayer.openInventory(inv);
-            });
-        });
-    }
-
-    private Inventory buildWorldOverviewMenu(String worldName, int returnPage, WorldEntry entry) {
-        Inventory inv = Bukkit.createInventory(
-            new SettingsHolder(worldName, returnPage),
-            SETTINGS_SIZE,
-            Component.text("Welt-Übersicht: " + entry.displayName(), NamedTextColor.DARK_AQUA)
-        );
-
-        ItemStack filler = namedItem(Material.GRAY_STAINED_GLASS_PANE, " ");
-        for (int slot = 28; slot <= 35; slot++) {
-            inv.setItem(slot, filler);
-        }
-        inv.setItem(27, namedItem(Material.SPRUCE_DOOR, "§fZurück"));
-
-        inv.setItem(
-            10,
-            namedItem(
-                entry.isPublic() ? Material.LIME_DYE : Material.GRAY_DYE,
-                entry.isPublic() ? "§aÖffentlich" : "§7Privat",
-                List.of(Component.text("Klicke zum Umschalten"))
-            )
-        );
-        inv.setItem(12, namedItem(Material.PLAYER_HEAD, "§bNur ansehen", List.of(Component.text("Öffnet die Liste der eingeladenen Spieler."))));
-        inv.setItem(13, namedItem(Material.DIAMOND_PICKAXE, "§aBauen erlauben", List.of(Component.text("Öffnet die Liste der Bau-Berechtigten."))));
-        inv.setItem(14, namedItem(Material.NAME_TAG, "§eAnzeigename ändern", List.of(Component.text("Klicke oder nutze /rename"))));
-        inv.setItem(16, namedItem(Material.ITEM_FRAME, "§bIcon ändern", List.of(Component.text("Klicke oder nutze /icon <MATERIAL>"))));
-        inv.setItem(18, namedItem(Material.COMPASS, "§fSpawn setzen", List.of(Component.text("Nutze /setspawn in dieser Welt"))));
-        inv.setItem(20, namedItem(Material.BARRIER, "§cWelt löschen", List.of(Component.text("Shift-Klick zum Löschen mit Multiverse"))));
-
-        return inv;
-    }
-
     private void openCreateOptionsMenu(Player player, int returnPage) {
         String worldName = generateLocalWorldName(player);
         openCreateOptionsMenu(player, worldName, returnPage, false, false);
@@ -2560,6 +2511,24 @@ public final class GuiManager {
 
         if (mode == ViewMode.ARCHIVED) {
             return admin ? repository.listArchivedWorlds() : List.of();
+        }
+
+        if (mode == ViewMode.PUBLIC) {
+            Map<String, WorldEntry> ticketWorlds = new ConcurrentHashMap<>();
+            for (WorldEntry entry : repository.listOpenTicketWorlds()) {
+                if (!isTicketWorld(entry)) {
+                    continue;
+                }
+                boolean assignedToPlayer = containsIgnoreCase(entry.invitedPlayers(), playerName)
+                    || containsIgnoreCase(entry.customers(), playerName);
+                if (admin || assignedToPlayer) {
+                    ticketWorlds.put(entry.worldName().toLowerCase(Locale.ROOT), entry);
+                }
+            }
+
+            List<WorldEntry> tickets = new ArrayList<>(ticketWorlds.values());
+            tickets.sort(Comparator.comparing(WorldEntry::worldName, String.CASE_INSENSITIVE_ORDER));
+            return tickets;
         }
 
         Map<String, WorldEntry> ticketWorlds = new ConcurrentHashMap<>();
@@ -2946,9 +2915,82 @@ public final class GuiManager {
             return;
         }
 
-        repository.archiveWorld(worldName);
+        player.sendMessage("§7Lösche Welt §f" + worldName + "§7 ...");
+
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.getWorld().getName().equalsIgnoreCase(worldName)) {
+                World fallback = Bukkit.getWorlds().isEmpty() ? null : Bukkit.getWorlds().get(0);
+                if (fallback != null) {
+                    online.teleport(fallback.getSpawnLocation());
+                    online.sendMessage("§eDie Welt §f" + worldName + " §ewird gelöscht. Du wurdest teleportiert.");
+                }
+            }
+        }
+
         removeWorldGuardProtection(worldName);
-        send(player, "delete-success", "%world%", worldName);
+
+        Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
+        if (mvCore != null && mvCore.isEnabled()) {
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv delete " + worldName);
+        }
+
+        World loaded = Bukkit.getWorld(worldName);
+        if (loaded != null && !Bukkit.unloadWorld(loaded, false)) {
+            player.sendMessage("§cWelt konnte nicht entladen werden: §f" + worldName);
+            return;
+        }
+
+        File worldFolder = new File(Bukkit.getWorldContainer(), worldName);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            if (worldFolder.exists()) {
+                try {
+                    deleteWorldFolderRecursively(worldFolder.toPath());
+                } catch (IOException ex) {
+                    plugin.getLogger().warning("Weltordner konnte nicht gelöscht werden (" + worldName + "): " + ex.getMessage());
+                }
+            }
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!isWorldReallyDeleted(worldName)) {
+                    player.sendMessage("§cWelt wurde nicht vollständig gelöscht. Bitte Konsole prüfen: §f" + worldName);
+                    plugin.getLogger().warning("Delete verification failed for world: " + worldName);
+                    return;
+                }
+
+                repository.deleteWorld(worldName);
+                send(player, "delete-success", "%world%", worldName);
+            });
+        });
+    }
+
+    private boolean isWorldReallyDeleted(String worldName) {
+        if (Bukkit.getWorld(worldName) != null) {
+            return false;
+        }
+        File worldFolder = new File(Bukkit.getWorldContainer(), worldName);
+        return !worldFolder.exists();
+    }
+
+    private void deleteWorldFolderRecursively(Path worldPath) throws IOException {
+        if (!Files.exists(worldPath)) {
+            return;
+        }
+        try (var stream = Files.walk(worldPath)) {
+            stream
+                .sorted(Comparator.reverseOrder())
+                .forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException ex) {
+                        throw new RuntimeException(ex);
+                    }
+                });
+        } catch (RuntimeException ex) {
+            if (ex.getCause() instanceof IOException ioEx) {
+                throw ioEx;
+            }
+            throw ex;
+        }
     }
 
     private void refreshWorldGuardProtection(String worldName) {
@@ -3259,6 +3301,10 @@ public final class GuiManager {
         return "";
     }
 
+    public String resolveLocalServerIdentifier() {
+        return resolveLocalServerId();
+    }
+
     private String resolveTargetCreationServer() {
         String localServer = resolveLocalServerId();
         List<String> selectableServers = resolveSelectableServerNames();
@@ -3291,8 +3337,30 @@ public final class GuiManager {
     }
 
     private List<String> resolveSelectableServerNames() {
-        Optional<Set<String>> onlineIdentifiersOpt = fetchOnlineServerIdentifiers();
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
+
+        List<String> apiOnline = repository.listOnlineServerNames(20);
+        if (!apiOnline.isEmpty()) {
+            List<String> allOnline = new ArrayList<>(new LinkedHashSet<>(apiOnline));
+            allOnline.sort(String.CASE_INSENSITIVE_ORDER);
+
+            if (blockedServers.isEmpty()) {
+                return allOnline;
+            }
+
+            List<String> visible = new ArrayList<>();
+            for (String online : allOnline) {
+                boolean blocked = blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, online));
+                if (!blocked) {
+                    visible.add(online);
+                }
+            }
+            if (!visible.isEmpty()) {
+                return visible;
+            }
+        }
+
+        Optional<Set<String>> onlineIdentifiersOpt = fetchOnlineServerIdentifiers();
 
         if (onlineIdentifiersOpt.isPresent()) {
             Set<String> onlineIdentifiers = onlineIdentifiersOpt.get();
@@ -3919,7 +3987,7 @@ public final class GuiManager {
         }
 
         if (slot == 49) {
-            openSettingsMenu(player, holder.worldName(), holder.returnPage());
+            openEditWorldGui(player, holder.worldName());
             return;
         }
 
@@ -3930,7 +3998,7 @@ public final class GuiManager {
         Material selected = clicked.getType();
         repository.setIcon(holder.worldName(), selected.name());
         send(player, "icon-success", "%icon%", selected.name());
-        openSettingsMenu(player, holder.worldName(), holder.returnPage());
+        openEditWorldGui(player, holder.worldName());
     }
 
     private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs) {

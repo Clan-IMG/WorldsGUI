@@ -175,11 +175,19 @@ public final class NavCommand implements TabExecutor {
             }
             case "customer" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav customer <remove|trust|untrust> ...");
+                    player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
                     return true;
                 }
                 String customerSub = args[1].toLowerCase(Locale.ROOT);
                 switch (customerSub) {
+                    case "invite" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav customer invite <world> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavCustomerInvite(player, args[2], args[3]);
+                        return true;
+                    }
                     case "remove" -> {
                         if (args.length < 4) {
                             player.sendMessage("Usage: /nav customer remove <world> <player>");
@@ -205,7 +213,7 @@ public final class NavCommand implements TabExecutor {
                         return true;
                     }
                     default -> {
-                        player.sendMessage("Usage: /nav customer <remove|trust|untrust> ...");
+                        player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
                         return true;
                     }
                 }
@@ -266,7 +274,7 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("customer")) {
-            return filterPrefix(List.of("remove", "trust", "untrust"), args[1]);
+            return filterPrefix(List.of("invite", "remove", "trust", "untrust"), args[1]);
         }
 
         if (args.length == 2) {

@@ -329,24 +329,24 @@ public final class WorldsRepository {
         return orderIds;
     }
 
-    public void setInvitedPlayers(String worldName, List<String> players) {
+    public boolean setInvitedPlayers(String worldName, List<String> players) {
         JsonObject body = new JsonObject();
         JsonArray values = new JsonArray();
         for (String player : players) {
             values.add(player);
         }
         body.add("values", values);
-        patchOrWarn("/worlds/" + encode(worldName) + "/invited-players", body);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/invited-players", body);
     }
 
-    public void setTrustedPlayers(String worldName, List<String> players) {
+    public boolean setTrustedPlayers(String worldName, List<String> players) {
         JsonObject body = new JsonObject();
         JsonArray values = new JsonArray();
         for (String player : players) {
             values.add(player);
         }
         body.add("values", values);
-        patchOrWarn("/worlds/" + encode(worldName) + "/trusted-players", body);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/trusted-players", body);
     }
 
     public Optional<WorldEntry> findByWorldName(String worldName) {
@@ -469,6 +469,58 @@ public final class WorldsRepository {
         }
     }
 
+    public void upsertServerPresence(String serverName, boolean online, String status, int heartbeatIntervalSeconds) {
+        String normalizedServer = serverName == null ? "" : serverName.trim();
+        if (normalizedServer.isBlank()) {
+            return;
+        }
+
+        JsonObject body = new JsonObject();
+        body.addProperty("serverName", normalizedServer);
+        body.addProperty("online", online);
+        body.addProperty("status", status == null ? "" : status);
+        body.addProperty("heartbeatIntervalSeconds", Math.max(1, heartbeatIntervalSeconds));
+
+        try {
+            ApiResponse response = request("PUT", "/worlds/server-presence", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("server-presence", "Server-Presence API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            warnThrottled("server-presence-ex", "Fehler beim Aktualisieren der Server-Presence via API: " + ex.getMessage());
+        }
+    }
+
+    public List<String> listOnlineServerNames(int graceSeconds) {
+        List<String> serverNames = new ArrayList<>();
+        try {
+            String path = "/worlds/servers/online?graceSeconds=" + Math.max(1, graceSeconds);
+            ApiResponse response = request("GET", path, null);
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("online-servers", "Online-Server API Fehler: HTTP " + response.statusCode());
+                return serverNames;
+            }
+
+            JsonObject json = parseObject(response.body());
+            JsonArray rows = json.has("servers") && json.get("servers").isJsonArray()
+                ? json.getAsJsonArray("servers")
+                : new JsonArray();
+            for (JsonElement element : rows) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject row = element.getAsJsonObject();
+                String name = getString(row, "serverName", "");
+                if (name != null && !name.isBlank()) {
+                    serverNames.add(name.trim());
+                }
+            }
+        } catch (Exception ex) {
+            warnThrottled("online-servers-ex", "Fehler beim Laden online Server via API: " + ex.getMessage());
+        }
+        return serverNames;
+    }
+
     public List<JoinRequest> listPendingJoinRequests(int limit) {
         List<JoinRequest> requests = new ArrayList<>();
         try {
@@ -556,14 +608,17 @@ public final class WorldsRepository {
         }
     }
 
-    private void patchOrWarn(String path, JsonObject body) {
+    private boolean patchOrWarn(String path, JsonObject body) {
         try {
             ApiResponse response = request("PATCH", path, gson.toJson(body));
             if (response.statusCode() / 100 != 2) {
                 plugin.getLogger().warning("PATCH " + path + " fehlgeschlagen: HTTP " + response.statusCode());
+                return false;
             }
+            return true;
         } catch (Exception ex) {
             plugin.getLogger().warning("PATCH " + path + " fehlgeschlagen: " + ex.getMessage());
+            return false;
         }
     }
 

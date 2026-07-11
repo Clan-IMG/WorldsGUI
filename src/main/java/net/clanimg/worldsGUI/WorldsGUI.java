@@ -26,12 +26,15 @@ import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class WorldsGUI extends JavaPlugin {
+    private static final int SERVER_HEARTBEAT_INTERVAL_SECONDS = 10;
+
     private WorldsRepository repository;
     private GuiManager guiManager;
     private BukkitTask joinRequestTask;
     private BukkitTask presenceRefreshTask;
     private BukkitTask ticketSyncTask;
     private BukkitTask roleSyncTask;
+    private BukkitTask serverHeartbeatTask;
     private ConsoleLoginListener consoleLoginListener;
     private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
 
@@ -92,6 +95,12 @@ public final class WorldsGUI extends JavaPlugin {
             this::syncOnlinePlayerRoles,
             20L * 15L,
             20L * roleSyncSeconds
+        );
+        serverHeartbeatTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
+            this,
+            () -> syncServerHeartbeat(),
+            20L,
+            20L * SERVER_HEARTBEAT_INTERVAL_SECONDS
         );
 
         if (getCommand("nav") != null) {
@@ -163,6 +172,11 @@ public final class WorldsGUI extends JavaPlugin {
             roleSyncTask.cancel();
             roleSyncTask = null;
         }
+        if (serverHeartbeatTask != null) {
+            serverHeartbeatTask.cancel();
+            serverHeartbeatTask = null;
+        }
+        syncServerHeartbeat(false);
         if (guiManager != null) {
             guiManager.shutdown();
         }
@@ -235,6 +249,24 @@ public final class WorldsGUI extends JavaPlugin {
             return;
         }
         guiManager.syncOnlineMinecraftRoles();
+    }
+
+    private void syncServerHeartbeat() {
+        syncServerHeartbeat(true);
+    }
+
+    private void syncServerHeartbeat(boolean online) {
+        if (repository == null || guiManager == null) {
+            return;
+        }
+
+        String localServer = guiManager.resolveLocalServerIdentifier();
+        if (localServer == null || localServer.isBlank()) {
+            return;
+        }
+
+        String status = online ? "bin da" : "offline";
+        repository.upsertServerPresence(localServer, online, status, SERVER_HEARTBEAT_INTERVAL_SECONDS);
     }
 
     private void disablePluginWithReason(String reason) {
