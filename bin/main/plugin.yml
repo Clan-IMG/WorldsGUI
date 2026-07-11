@@ -95,6 +95,9 @@ permissions:
   worldsgui.command.nav.my-world.icon:
     description: Erlaubt /nav my-world icon
     default: op
+  worldsgui.command.nav.my-world.clone:
+    description: Erlaubt /nav my-world clone <world-name> [player]
+    default: op
   worldsgui.command.nav.setspawn:
     description: Erlaubt /nav setspawn
     default: op

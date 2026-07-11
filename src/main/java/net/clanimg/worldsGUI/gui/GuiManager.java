@@ -5,10 +5,12 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -55,6 +57,7 @@ import org.bukkit.GameRule;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.WorldCreator;
 import org.bukkit.WorldType;
@@ -286,7 +289,7 @@ public final class GuiManager {
     private List<Map<String, String>> resolveSlotRangeItems(String source, Player player, PlayerGuiSession session) {
         if ("servers".equalsIgnoreCase(source)) {
             List<Map<String, String>> items = new ArrayList<>();
-            for (String serverName : resolveAllowedServerNames()) {
+            for (String serverName : resolveSelectableServerNames()) {
                 items.add(Map.of("server_id", serverName, "server_name", serverName));
             }
             return items;
@@ -1021,6 +1024,133 @@ public final class GuiManager {
         handleIconCommand(player, worldName, args);
     }
 
+    public void executeNavMyWorldClone(Player player, String sourceWorldName, String targetPlayerName) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CLONE, true)) {
+            return;
+        }
+
+        String sourceName = sourceWorldName == null ? "" : sourceWorldName.trim();
+        if (sourceName.isBlank()) {
+            player.sendMessage("§cUsage: /nav my-world clone <world-name> [player]");
+            return;
+        }
+
+        Optional<WorldEntry> sourceEntryOpt = repository.findByWorldName(sourceName);
+        if (sourceEntryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry sourceEntry = sourceEntryOpt.get();
+        boolean isOwner = sourceEntry.ownerUuid().equals(player.getUniqueId().toString());
+        if (!isOwner && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+
+        if (!isWorldOnThisServer(sourceEntry)) {
+            player.sendMessage("§cDie Quellwelt liegt nicht auf diesem Server und kann hier nicht geklont werden.");
+            return;
+        }
+
+        CloneTarget target = resolveCloneTarget(player, targetPlayerName);
+        if (target == null) {
+            return;
+        }
+
+        String cloneWorldName = generateCloneWorldName(target.ownerName());
+        if (cloneWorldName.isBlank()) {
+            player.sendMessage("§cEs konnte kein freier Name für die geklonte Welt erzeugt werden.");
+            return;
+        }
+
+        boolean cloneTriggered = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv clone " + sourceEntry.worldName() + " " + cloneWorldName);
+        if (!cloneTriggered) {
+            player.sendMessage("§cKlonen fehlgeschlagen. Prüfe Multiverse / Konsole.");
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            World cloned = Bukkit.getWorld(cloneWorldName);
+            if (cloned == null) {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + cloneWorldName);
+                cloned = Bukkit.getWorld(cloneWorldName);
+            }
+            if (cloned == null) {
+                player.sendMessage("§cKlon erstellt, aber Welt konnte nicht geladen werden: §f" + cloneWorldName);
+                return;
+            }
+
+            int worldIndex = repository.nextWorldIndex(target.ownerUuid());
+            boolean persisted = repository.insertWorld(
+                cloneWorldName,
+                target.ownerUuid(),
+                target.ownerName(),
+                null,
+                null,
+                "private",
+                null,
+                List.of(),
+                worldIndex,
+                cloneWorldName,
+                sourceEntry.iconMaterial(),
+                false,
+                false,
+                sourceEntry.serverName()
+            );
+
+            if (!persisted) {
+                player.sendMessage("§cKlon erstellt, aber DB-Eintrag fehlgeschlagen: §f" + cloneWorldName);
+                return;
+            }
+
+            player.sendMessage("§aWelt geklont: §f" + sourceEntry.worldName() + " §7-> §f" + cloneWorldName);
+            if (target.ownerUuid().equals(player.getUniqueId().toString())) {
+                player.sendMessage("§7Die geklonte Welt gehört jetzt dir und ist unter /nav sichtbar.");
+            } else {
+                player.sendMessage("§7Die geklonte Welt gehört jetzt §f" + target.ownerName() + "§7 und ist unter /nav sichtbar.");
+            }
+        }, 20L);
+    }
+
+    private CloneTarget resolveCloneTarget(Player actor, String targetPlayerName) {
+        if (targetPlayerName == null || targetPlayerName.isBlank()) {
+            return new CloneTarget(actor.getUniqueId().toString(), actor.getName());
+        }
+
+        String normalized = normalizePlayerName(targetPlayerName);
+        if (normalized == null) {
+            actor.sendMessage("§cUngültiger Spielername.");
+            return null;
+        }
+
+        Player online = Bukkit.getPlayerExact(normalized);
+        if (online != null) {
+            return new CloneTarget(online.getUniqueId().toString(), online.getName());
+        }
+
+        OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(normalized);
+        if (cached != null && cached.getUniqueId() != null) {
+            String ownerName = cached.getName() == null || cached.getName().isBlank() ? normalized : cached.getName();
+            return new CloneTarget(cached.getUniqueId().toString(), ownerName);
+        }
+
+        actor.sendMessage("§cSpieler nicht gefunden (muss mindestens einmal auf dem Server gewesen sein): §f" + normalized);
+        return null;
+    }
+
+    private String generateCloneWorldName(String ownerName) {
+        String safeOwner = ownerName == null || ownerName.isBlank() ? "world" : ownerName.trim();
+        for (int attempt = 0; attempt < 200; attempt++) {
+            int localId = ThreadLocalRandom.current().nextInt(1000, 10_000);
+            String candidate = safeOwner + "-" + localId;
+            if (isLocalWorldNameAvailable(candidate) && repository.findByWorldName(candidate).isEmpty()) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
     public void executeNavCreate(Player player, String worldName, String orderLabel) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_CREATE, true)) {
             return;
@@ -1172,6 +1302,25 @@ public final class GuiManager {
 
     public List<String> listOpenTicketOrderIds(Player player) {
         return repository.listAssignedOpenOrderIds(player.getName());
+    }
+
+    public List<String> listCloneTargetPlayerNames(Player player) {
+        Set<String> names = new LinkedHashSet<>();
+        names.add(player.getName());
+
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            names.add(online.getName());
+        }
+
+        for (WorldEntry entry : repository.listOwnWorlds(player.getUniqueId().toString())) {
+            if (entry.ownerName() != null && !entry.ownerName().isBlank()) {
+                names.add(entry.ownerName());
+            }
+            names.addAll(entry.invitedPlayers());
+            names.addAll(entry.trustedPlayers());
+        }
+
+        return new ArrayList<>(names);
     }
 
     public void executeRename(Player player, String[] args) {
@@ -2677,6 +2826,143 @@ public final class GuiManager {
         return out;
     }
 
+    private List<String> resolveSelectableServerNames() {
+        List<String> allowedServers = resolveAllowedServerNames();
+        if (allowedServers.isEmpty()) {
+            String local = resolveLocalServerId();
+            return local == null || local.isBlank() ? List.of() : List.of(local);
+        }
+
+        Optional<Set<String>> onlineIdentifiersOpt = fetchOnlineServerIdentifiers();
+        if (onlineIdentifiersOpt.isEmpty()) {
+            return allowedServers;
+        }
+
+        Set<String> onlineIdentifiers = onlineIdentifiersOpt.get();
+        List<String> visible = new ArrayList<>();
+        for (String allowed : allowedServers) {
+            boolean online = onlineIdentifiers.stream().anyMatch(onlineId -> isSameServerIdentifier(allowed, onlineId));
+            if (online) {
+                visible.add(allowed);
+            }
+        }
+
+        if (!visible.isEmpty()) {
+            return visible;
+        }
+
+        String local = resolveLocalServerId();
+        if (local != null && !local.isBlank()) {
+            for (String allowed : allowedServers) {
+                if (isSameServerIdentifier(allowed, local)) {
+                    return List.of(allowed);
+                }
+            }
+        }
+
+        return List.of();
+    }
+
+    private Optional<Set<String>> fetchOnlineServerIdentifiers() {
+        String controllerUrl = plugin.getConfig().getString("simplecloud.controller-url", "");
+        String networkId = plugin.getConfig().getString("simplecloud.network-id", "");
+        String networkSecret = plugin.getConfig().getString("simplecloud.network-secret", "");
+        if (controllerUrl == null || controllerUrl.isBlank() || networkId == null || networkId.isBlank() || networkSecret == null || networkSecret.isBlank()) {
+            return Optional.empty();
+        }
+
+        String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
+        for (String path : List.of("/v0/services", "/v0/servers")) {
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(normalizedController + path))
+                    .header("Accept", "application/json")
+                    .header("X-Network-ID", networkId)
+                    .header("X-Network-Secret", networkSecret)
+                    .GET()
+                    .build();
+
+                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() / 100 != 2) {
+                    continue;
+                }
+
+                Set<String> identifiers = parseOnlineServerIdentifiers(response.body());
+                return Optional.of(identifiers);
+            } catch (Exception ignored) {
+                // Try next known endpoint.
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Set<String> parseOnlineServerIdentifiers(String json) {
+        Set<String> out = new LinkedHashSet<>();
+        if (json == null || json.isBlank()) {
+            return out;
+        }
+
+        Pattern objectPattern = Pattern.compile("\\{[^{}]*}");
+        Matcher objectMatcher = objectPattern.matcher(json);
+        while (objectMatcher.find()) {
+            String objectJson = objectMatcher.group();
+            if (!looksLikeOnlineService(objectJson)) {
+                continue;
+            }
+
+            String identifier = firstNonBlank(
+                extractJsonString(objectJson, "server_id"),
+                extractJsonString(objectJson, "service_id"),
+                extractJsonString(objectJson, "service_name"),
+                extractJsonString(objectJson, "server_name"),
+                extractJsonString(objectJson, "name"),
+                extractJsonString(objectJson, "id")
+            );
+
+            if (identifier != null && !identifier.isBlank()) {
+                out.add(identifier.trim());
+            }
+        }
+        return out;
+    }
+
+    private boolean looksLikeOnlineService(String objectJson) {
+        if (objectJson == null || objectJson.isBlank()) {
+            return false;
+        }
+
+        if (jsonBooleanFieldIsTrue(objectJson, "online") || jsonBooleanFieldIsTrue(objectJson, "running")) {
+            return true;
+        }
+
+        String state = firstNonBlank(
+            extractJsonString(objectJson, "state"),
+            extractJsonString(objectJson, "status")
+        );
+        if (state == null) {
+            return false;
+        }
+
+        String normalized = state.trim().toUpperCase(Locale.ROOT);
+        return "ONLINE".equals(normalized)
+            || "RUNNING".equals(normalized)
+            || "STARTED".equals(normalized)
+            || "AVAILABLE".equals(normalized);
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     /** Öffentlicher Wrapper für Tab-Completion (z.B. /nav create &lt;world-type&gt; &lt;server-id&gt;). */
     public List<String> listAllowedServerNames() {
         return resolveAllowedServerNames();
@@ -3123,5 +3409,8 @@ public final class GuiManager {
     }
 
     private record PendingTicketWorld(String worldName, List<String> customers, boolean archived) {
+    }
+
+    private record CloneTarget(String ownerUuid, String ownerName) {
     }
 }
