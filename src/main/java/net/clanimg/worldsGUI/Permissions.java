@@ -13,10 +13,14 @@ public final class Permissions {
     public static final String NAV_MY_WORLD_DELETE = "worldsgui.command.nav.my-world.delete";
     public static final String NAV_MY_WORLD_OPEN = "worldsgui.command.nav.my-world.open";
     public static final String NAV_MY_WORLD_CLOSED = "worldsgui.command.nav.my-world.closed";
+    public static final String NAV_MY_WORLD_INVITE = "worldsgui.command.nav.my-world.invite";
+    public static final String NAV_MY_WORLD_REMOVE = "worldsgui.command.nav.my-world.remove";
     public static final String NAV_MY_WORLD_TRUST = "worldsgui.command.nav.my-world.trust";
     public static final String NAV_MY_WORLD_UNTRUST = "worldsgui.command.nav.my-world.untrust";
     public static final String NAV_MY_WORLD_RENAME = "worldsgui.command.nav.my-world.rename";
     public static final String NAV_MY_WORLD_ICON = "worldsgui.command.nav.my-world.icon";
+    public static final String NAV_MY_WORLD_CLONE = "worldsgui.command.nav.my-world.clone";
+    public static final String NAV_MY_WORLD_IMPORT = "worldsgui.command.nav.my-world.import";
     public static final String NAV_INVITE = "worldsgui.command.nav.invite";
     public static final String NAV_REMOVE = "worldsgui.command.nav.remove";
     public static final String NAV_TRUST = "worldsgui.command.nav.trust";

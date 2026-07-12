@@ -7,12 +7,18 @@ api:
   request-timeout-seconds: 20
   # Optional: Base URL for profile/verify endpoints.
   # Set this to api.clan-img.net if /verify is handled by the main API service.
-  profile-base-url: ""
+  profile-base-url: "https://api.clan-img.net"
   profile-token: ""
 
-  allowed-server-names:
-    - "build"
-    - "dev"
+  # Optionale Blacklist für Ziel-Server.
+  # Standard: alle online Server aus SimpleCloud sind erlaubt/werden angezeigt.
+  # Nur hier eintragen, wenn einzelne Server NICHT auswählbar sein sollen.
+  blocked-server-names: []
+
+  # Optional override für die lokale Server-ID.
+  # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
+  # von den Server-IDs aus SimpleCloud abweicht.
+  local-server-name: ""
 
 luckperms:
   group-team: "team"
@@ -23,8 +29,8 @@ luckperms:
 simplecloud:
   # Controller API endpoint and credentials for player transfer
   controller-url: "https://controller.simplecloud.app"
-  network-id: ""
-  network-secret: ""
+  network-id: "2be2cf66-80e0-4e47-8d80-b97d6f14aaa7"
+  network-secret: "FDt6TlD5z464KdB7SI3YyDrYl2EIKyo1"
 
 messages:
   prefix: "&3WorldsGUI &8» &7%messages%"

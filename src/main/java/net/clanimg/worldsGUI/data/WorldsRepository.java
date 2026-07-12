@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.InetAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -14,18 +15,23 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import net.clanimg.worldsGUI.model.WorldEntry;
 import org.bukkit.Location;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class WorldsRepository {
+    private static final long WARNING_COOLDOWN_MS = 30_000L;
+
     private final JavaPlugin plugin;
     private final String apiBaseUrl;
     private final String apiToken;
     private final HttpClient httpClient;
     private final Duration requestTimeout;
     private final Gson gson;
+    private final Map<String, Long> warningCooldowns = new ConcurrentHashMap<>();
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
@@ -82,13 +88,13 @@ public final class WorldsRepository {
             String path = "/worlds/next-index?ownerUuid=" + encode(ownerUuid);
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("nextWorldIndex API Fehler: HTTP " + response.statusCode());
+                warnThrottled("nextWorldIndex", "nextWorldIndex API Fehler: HTTP " + response.statusCode());
                 return 1;
             }
             JsonObject json = parseObject(response.body());
             return getInt(json, "nextIndex", 1);
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Ermitteln des Weltindex via API: " + ex.getMessage());
+            warnThrottled("nextWorldIndex-ex", "Fehler beim Ermitteln des Weltindex via API: " + ex.getMessage());
             return 1;
         }
     }
@@ -196,14 +202,15 @@ public final class WorldsRepository {
                     // Duplicate/exists can happen on retries and should be treated as idempotent success.
                     return true;
                 }
-                plugin.getLogger().warning(
+                warnThrottled(
+                    "post-worlds-status",
                     "POST /worlds fehlgeschlagen: HTTP " + status + " body=" + abbreviate(response.body(), 280)
                 );
                 return false;
             }
             return true;
         } catch (Exception ex) {
-            plugin.getLogger().warning("POST /worlds fehlgeschlagen: " + ex.getMessage());
+            warnThrottled("post-worlds-ex", "POST /worlds fehlgeschlagen: " + ex.getMessage());
             return false;
         }
     }
@@ -323,24 +330,24 @@ public final class WorldsRepository {
         return orderIds;
     }
 
-    public void setInvitedPlayers(String worldName, List<String> players) {
+    public boolean setInvitedPlayers(String worldName, List<String> players) {
         JsonObject body = new JsonObject();
         JsonArray values = new JsonArray();
         for (String player : players) {
             values.add(player);
         }
         body.add("values", values);
-        patchOrWarn("/worlds/" + encode(worldName) + "/invited-players", body);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/invited-players", body);
     }
 
-    public void setTrustedPlayers(String worldName, List<String> players) {
+    public boolean setTrustedPlayers(String worldName, List<String> players) {
         JsonObject body = new JsonObject();
         JsonArray values = new JsonArray();
         for (String player : players) {
             values.add(player);
         }
         body.add("values", values);
-        patchOrWarn("/worlds/" + encode(worldName) + "/trusted-players", body);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/trusted-players", body);
     }
 
     public Optional<WorldEntry> findByWorldName(String worldName) {
@@ -350,7 +357,7 @@ public final class WorldsRepository {
                 return Optional.empty();
             }
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("findByWorldName API Fehler: HTTP " + response.statusCode());
+                warnThrottled("findByWorldName", "findByWorldName API Fehler: HTTP " + response.statusCode());
                 return Optional.empty();
             }
             JsonObject json = parseObject(response.body());
@@ -362,7 +369,7 @@ public final class WorldsRepository {
             }
             return Optional.of(mapEntry(world));
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Laden der Weltdaten via API: " + ex.getMessage());
+            warnThrottled("findByWorldName-ex", "Fehler beim Laden der Weltdaten via API: " + ex.getMessage());
             return Optional.empty();
         }
     }
@@ -371,8 +378,10 @@ public final class WorldsRepository {
         return listWorlds("/worlds/owner/" + encode(ownerUuid), "eigener Welten");
     }
 
-    public List<WorldEntry> listDiscoverableWorlds(String viewerUuid, boolean admin) {
-        String path = "/worlds/discoverable?viewerUuid=" + encode(viewerUuid) + "&admin=" + admin;
+    public List<WorldEntry> listDiscoverableWorlds(String viewerUuid, String viewerMinecraftName, boolean admin) {
+        String path = "/worlds/discoverable?viewerUuid=" + encode(viewerUuid)
+            + "&viewerMinecraftName=" + encode(viewerMinecraftName == null ? "" : viewerMinecraftName)
+            + "&admin=" + admin;
         return listWorlds(path, "öffentlicher Welten");
     }
 
@@ -454,11 +463,63 @@ public final class WorldsRepository {
         try {
             ApiResponse response = request("PUT", "/worlds/presence", gson.toJson(body));
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("Presence API Fehler: HTTP " + response.statusCode());
+                warnThrottled("presence", "Presence API Fehler: HTTP " + response.statusCode());
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Aktualisieren der Presence via API: " + ex.getMessage());
+            warnThrottled("presence-ex", "Fehler beim Aktualisieren der Presence via API: " + ex.getMessage());
         }
+    }
+
+    public void upsertServerPresence(String serverName, boolean online, String status, int heartbeatIntervalSeconds) {
+        String normalizedServer = serverName == null ? "" : serverName.trim();
+        if (normalizedServer.isBlank()) {
+            return;
+        }
+
+        JsonObject body = new JsonObject();
+        body.addProperty("serverName", normalizedServer);
+        body.addProperty("online", online);
+        body.addProperty("status", status == null ? "" : status);
+        body.addProperty("heartbeatIntervalSeconds", Math.max(1, heartbeatIntervalSeconds));
+
+        try {
+            ApiResponse response = request("PUT", "/worlds/server-presence", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("server-presence", "Server-Presence API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            warnThrottled("server-presence-ex", "Fehler beim Aktualisieren der Server-Presence via API: " + ex.getMessage());
+        }
+    }
+
+    public List<String> listOnlineServerNames(int graceSeconds) {
+        List<String> serverNames = new ArrayList<>();
+        try {
+            String path = "/worlds/servers/online?graceSeconds=" + Math.max(1, graceSeconds);
+            ApiResponse response = request("GET", path, null);
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("online-servers", "Online-Server API Fehler: HTTP " + response.statusCode());
+                return serverNames;
+            }
+
+            JsonObject json = parseObject(response.body());
+            JsonArray rows = json.has("servers") && json.get("servers").isJsonArray()
+                ? json.getAsJsonArray("servers")
+                : new JsonArray();
+            for (JsonElement element : rows) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject row = element.getAsJsonObject();
+                String name = getString(row, "serverName", "");
+                if (name != null && !name.isBlank()) {
+                    serverNames.add(name.trim());
+                }
+            }
+        } catch (Exception ex) {
+            warnThrottled("online-servers-ex", "Fehler beim Laden online Server via API: " + ex.getMessage());
+        }
+        return serverNames;
     }
 
     public List<JoinRequest> listPendingJoinRequests(int limit) {
@@ -467,7 +528,7 @@ public final class WorldsRepository {
             String path = "/worlds/join-requests/pending?limit=" + Math.max(1, limit);
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("JoinRequest API Fehler: HTTP " + response.statusCode());
+                warnThrottled("join-requests", "JoinRequest API Fehler: HTTP " + response.statusCode());
                 return requests;
             }
 
@@ -487,7 +548,7 @@ public final class WorldsRepository {
                 ));
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
+            warnThrottled("join-requests-ex", "Fehler beim Laden der Join-Requests via API: " + ex.getMessage());
         }
         return requests;
     }
@@ -508,7 +569,7 @@ public final class WorldsRepository {
         try {
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
-                plugin.getLogger().warning("Fehler beim Laden " + label + " via API: HTTP " + response.statusCode());
+                warnThrottled("list-worlds:" + label, "Fehler beim Laden " + label + " via API: HTTP " + response.statusCode());
                 return entries;
             }
 
@@ -522,9 +583,19 @@ public final class WorldsRepository {
                 }
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Fehler beim Laden " + label + " via API: " + ex.getMessage());
+            warnThrottled("list-worlds-ex:" + label, "Fehler beim Laden " + label + " via API: " + ex.getMessage());
         }
         return entries;
+    }
+
+    private void warnThrottled(String key, String message) {
+        long now = System.currentTimeMillis();
+        long nextAllowed = warningCooldowns.getOrDefault(key, 0L);
+        if (nextAllowed > now) {
+            return;
+        }
+        warningCooldowns.put(key, now + WARNING_COOLDOWN_MS);
+        plugin.getLogger().warning(message);
     }
 
     private void postOrWarn(String path, JsonObject body) {
@@ -538,14 +609,17 @@ public final class WorldsRepository {
         }
     }
 
-    private void patchOrWarn(String path, JsonObject body) {
+    private boolean patchOrWarn(String path, JsonObject body) {
         try {
             ApiResponse response = request("PATCH", path, gson.toJson(body));
             if (response.statusCode() / 100 != 2) {
                 plugin.getLogger().warning("PATCH " + path + " fehlgeschlagen: HTTP " + response.statusCode());
+                return false;
             }
+            return true;
         } catch (Exception ex) {
             plugin.getLogger().warning("PATCH " + path + " fehlgeschlagen: " + ex.getMessage());
+            return false;
         }
     }
 
@@ -712,7 +786,10 @@ public final class WorldsRepository {
         for (String envKey : List.of(
             "SIMPLECLOUD_SERVER_ID",
             "SIMPLECLOUD_SERVICE_NAME",
+            "SIMPLECLOUD_SERVICE_ID",
+            "CLOUDNET_SERVICE_ID",
             "CLOUDNET_SERVICE_NAME",
+            "SERVICE_NAME",
             "SERVER_NAME",
             "HOSTNAME"
         )) {
@@ -720,6 +797,15 @@ public final class WorldsRepository {
             if (value != null && !value.isBlank()) {
                 return value.trim();
             }
+        }
+
+        try {
+            String host = InetAddress.getLocalHost().getHostName();
+            if (host != null && !host.isBlank()) {
+                return host.trim();
+            }
+        } catch (Exception ignored) {
+            // Best-effort fallback only.
         }
         return "";
     }

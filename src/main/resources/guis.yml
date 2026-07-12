@@ -1,0 +1,526 @@
+# ============================================================
+# WorldsGUI - guis.yml
+# ============================================================
+#
+# GRUNDPRINZIP: SLOT-KOORDINATEN
+# ------------------------------------------------------------
+# Es gibt ZWEI unterschiedliche Koordinatensysteme in dieser Config,
+# die man nicht verwechseln darf:
+#
+# 1) "slot-1" bis "slot-9" (Zeilen-Notation)
+#    -> Bezieht sich auf EINE Reihe mit 9 Positionen (wie eine Hotbar).
+#    -> Wird NICHT als roher Inventar-Index interpretiert, sondern
+#       durch "position" auf die tatsächliche Zeile im echten
+#       Inventar abgebildet:
+#         position: "bottom" -> echte Slots 45 bis 53
+#         position: "middle" -> mittige Zeile, hängt von gui-size ab
+#                                 (z.B. bei gui-size: 27 -> Slots 9 bis 17)
+#    -> Wenn nur einzelne slot-1..slot-9 gesetzt werden, bleiben die
+#       übrigen automatisch leer (Standard: GRAY_STAINED_GLASS_PANE,
+#       Title: "").
+#
+# 2) "slot-range" (rohe Inventar-Indizes)
+#    -> "from" und "to" sind ECHTE, absolute Slot-Indizes im
+#       Gesamtinventar (0 bis gui-size - 1), KEINE Zeilen-Notation.
+#    -> Wird genutzt, um eine dynamische, vom Plugin generierte
+#       Liste von Items in einen Slot-Bereich zu rendern
+#       (z.B. Server-Liste, Spieler-Köpfe, eigene Welten).
+#    -> WICHTIG: from/to darf sich NICHT mit den echten Slots
+#       überschneiden, die durch slot-1..slot-9 + position belegt
+#       werden! Beispiel: bei gui-size: 54 + position: bottom
+#       belegt die Zeilen-Notation Slots 45-53, also darf
+#       slot-range höchstens bis "to: 44" gehen.
+#
+# Was sind "generierte Welten" (bei my-worlds / position: bottom)?
+# Das sind Welten, die das System automatisch in die freien
+# Slots eines slot-range-Bereichs einsetzt, sortiert nach
+# Erstellungsdatum (neueste Welt = am weitesten links/oben in der Liste).
+#
+# "position: middle" deaktiviert diese automatische Welten-Anzeige,
+# weil in einem GUI dieser Größe (meist gui-size: 27) schlicht nicht
+# genug Platz dafür ist. "position: bottom" aktiviert sie, weil
+# genug Raum (z.B. bei gui-size: 54) vorhanden ist.
+#
+# ------------------------------------------------------------
+# TRIGGER-TYPEN (vollständige Referenz)
+# ------------------------------------------------------------
+#
+# trigger: "command"
+#   command: ""      # Command, wird sofort bei den geforderten Klicks ausgeführt
+#   clicks: 1         # optional, Standard 1, Anzahl nötiger Klicks
+#
+# trigger: "open-gui"
+#   gui-id: ""        # ID eines anderen GUIs (muss in dieser Datei existieren).
+#                      # "confirm" ist reserviert für Bestätigungs-Dialoge.
+#   params:           # optional, Key-Value-Map. Wird beim Öffnen des Ziel-GUIs
+#                      # genutzt, um Platzhalter im Ziel-GUI zu ersetzen
+#                      # (z.B. %confirm-command% im "confirm"-GUI).
+#     confirm-command: "nav my-world delete %world%"
+#
+# trigger: "return"
+#   (keine weiteren Felder nötig)
+#   Öffnet immer das GUI, das VOR dem aktuellen geöffnet war
+#   (die Navigations-Historie), NICHT das zuletzt geschlossene GUI.
+#
+# trigger: "select"
+#   select-id: ""      # Gruppen-/Namensraum-Schlüssel, unter dem der Wert
+#                        # in der Spieler-Session gespeichert wird
+#   select-value: ""     # der zu speichernde Wert
+#   gui-id: ""             # optional: öffnet nach dem Speichern automatisch
+#                            # dieses GUI (z.B. Void wählen -> Server-Auswahl)
+#   Das ausgewählte Item wird üblicherweise "enchanted" angezeigt, um die
+#   aktuelle Auswahl visuell zu markieren. Mehrere select-Slots mit
+#   demselben select-id gehören zu EINER Entscheidung (z.B. Void vs.
+#   Flatworld); der zuletzt angeklickte Wert überschreibt den vorigen.
+#   Gespeicherte Werte werden später per "%selection:<select-id>%"
+#   in einem "confirm-command" o.ä. wieder ausgelesen.
+#
+# trigger: "anvil-input"
+#   anvil-title: ""    # Titel des Anvil-Textfelds
+#   gui-id: ""          # GUI, das nach der Text-Eingabe geöffnet wird
+#   param-key: ""        # Schlüssel, unter dem der eingegebene Text
+#                          # (NICHT dauerhaft wie bei "select", sondern nur
+#                          # als Übergabewert für das nächste GUI) gespeichert
+#                          # wird. Abrufbar im Ziel-GUI per "%param:<param-key>%",
+#                          # z.B. als "filter" in einem slot-range.
+#   Anders als "select": hier wird kein bereits sichtbares Item angeklickt,
+#   sondern freier Text eingegeben (z.B. Spielername zum Suchen).
+#
+# trigger: "toggle"
+#   toggle-id: ""       # Schlüssel des Toggles (in der Session gespeichert)
+#   start-state: ""      # Startzustand, falls noch nichts gespeichert ist
+#   states:
+#     <state-id>:
+#       material: ""     # Material für das Item in diesem Zustand
+#       title: ""        # Titel für das Item in diesem Zustand
+#       command: ""      # Command, der beim Klick in diesem Zustand sofort ausgeführt wird
+#       next: ""         # Zustand, der danach aktiv ist
+#   Toggle führt den Command SOFORT aus und rendert das aktuelle GUI neu,
+#   ohne das Inventar zu schließen.
+#
+# ------------------------------------------------------------
+# CLICK-VARIANTEN
+# ------------------------------------------------------------
+# Jede "action" kann entweder:
+#   a) direkt einen einzelnen Trigger enthalten (click-unabhängig,
+#      z.B. bei "return", wo der Klick-Typ egal ist), oder
+#   b) in "left-click:" und "right-click:" aufgeteilt werden, wenn
+#      unterschiedliche Klicks unterschiedliche Aktionen auslösen
+#      sollen (z.B. Linksklick = Spieler hinzufügen/trusten,
+#      Rechtsklick = Spieler entfernen/untrusten).
+# Das gilt auch innerhalb von slot-range: die "action" dort kann
+# ebenfalls left-click/right-click getrennt definieren.
+#
+# ------------------------------------------------------------
+# SELECTION vs. PARAM - wichtiger Unterschied
+# ------------------------------------------------------------
+# %selection:<id>%  -> Wert aus "trigger: select", gedacht als Teil
+#                        einer mehrstufigen Entscheidungskette, die am
+#                        Ende in einem finalen Command zusammengeführt
+#                        wird (z.B. World-Type + Server -> Welt erstellen).
+# %param:<key>%      -> Wert aus "trigger: anvil-input", ein reiner
+#                        Übergabewert für den NÄCHSTEN Schritt
+#                        (typischerweise ein Such-/Filterbegriff),
+#                        kein Teil einer langfristigen Auswahl-Kette.
+#
+# ------------------------------------------------------------
+# PLATZHALTER-KONVENTION FÜR SPIELERNAMEN
+# ------------------------------------------------------------
+# %player_name%         -> der Spieler, der GERADE im GUI klickt/handelt
+# %target_player_name%  -> ein Spieler, der aus einer dynamisch
+#                           generierten Liste stammt (z.B. Köpfe aus
+#                           luckperms-players oder trusted-players).
+#                           Wichtig, um "ich" von "der ausgewählte
+#                           andere Spieler" eindeutig zu unterscheiden.
+#
+# ------------------------------------------------------------
+# BEKANNTE EINSCHRÄNKUNGEN (bewusst akzeptiert, kein Bug)
+# ------------------------------------------------------------
+# - select-server: from 3 bis 8 (6 Slots) hat KEINE Pagination.
+#   Bei mehr als 6 Servern werden überzählige Server abgeschnitten,
+#   nicht auf einer zweiten Seite angezeigt. Aktuell ok, da die
+#   Server-Anzahl klein bleibt.
+# - invited-friends / select-friend: from 0 bis 44 (45 Slots) hat
+#   ebenfalls keine Pagination. Bei mehr als 45 getrusteten Spielern
+#   bzw. Suchtreffern würde die Liste abgeschnitten.
+# - Bei leerem Such-Text in select-friend (Anvil ohne Eingabe
+#   bestätigt) muss das Plugin serverseitig festlegen, ob das
+#   "alle Spieler anzeigen" oder "keine Treffer" bedeutet.
+#   Empfehlung: leerer Filter = alle anzeigen.
+#
+# ============================================================
+
+example-gui:
+  gui-size: 54
+  title: "Example GUI" # MiniMessage oder Farbcodes z.B. &7Meine Welt oder <gradient:#734892:#2F9CBA>Clan IMG</gradient>. Standardmäßig ist die Farbe &7
+  position: "middle" # oder "bottom"
+  slots:
+    slot-1: # Zeilen-Notation, geht nur von 1 bis 9
+      material: "DIAMOND" # Minecraft Item oder %player_head% für den eigenen Kopf
+      title: "Example Item"
+      action:
+        left-click:
+          trigger: "command"
+          command: "nav my-worlds create %player_name%-%world-id%"
+          clicks: 3
+        right-click:
+          trigger: "open-gui"
+          gui-id: "another-gui"
+    slot-3:
+      material: "BARRIER"
+      title: "&cZurück"
+      action:
+        trigger: "return"
+    slot-5:
+      material: "PAPER"
+      title: "Wähle mich"
+      action:
+        trigger: "open-gui"
+        gui-id: "confirm"
+        params:
+          confirm-command: "nav my-world delete %world%"
+    slot-8:
+      material: "PAPER"
+      title: "Wähle mich"
+      action:
+        trigger: "select"
+        select-id: "world-icon"
+        select-value: "GOLD_BLOCK"
+    slot-9:
+      material: "PAPER"
+      title: "Wähle mich"
+
+
+guis:
+
+  # Generisches Bestätigungs-GUI. %confirm-command% wird beim Öffnen
+  # über "params.confirm-command" (aus dem aufrufenden GUI) ersetzt.
+  # Wird für alle destruktiven/wichtigen Aktionen genutzt (z.B. Löschen,
+  # finale Welt-Erstellung), NICHT für harmlose/reversible Aktionen
+  # wie trust/untrust.
+  confirm:
+    gui-size: 27
+    title: "&7Bist du sicher?"
+    slots:
+      slot-5:
+        material: "BARRIER"
+        title: "Bestätigen"
+        clicks: 1
+        action:
+          trigger: "command"
+          command: "%confirm-command%"
+
+  # Startseite bei /nav
+  my-worlds:
+    gui-size: 54
+    title: "Meine Welten"
+    position: bottom # generiert automatisch die Welten-Anzeige in den freien Slots
+    slots:
+      slot-3:
+        material: "%player_head%"
+        title: "Eingeladene Welten"
+        action:
+          trigger: "open-gui"
+          gui-id: "invited-worlds"
+      slot-5:
+        material: "GRASS_BLOCK"
+        title: "Welten erstellen"
+        action:
+          trigger: "open-gui"
+          gui-id: "create-world"
+      slot-7:
+        material: "COMPASS"
+        title: "Tickets"
+        action:
+          trigger: "open-gui"
+          gui-id: "tickets"
+
+  # Rechtsklick auf eine Welt aus der dynamischen Anzeige (my-worlds)
+  # öffnet dieses GUI, um die jeweilige Welt zu bearbeiten.
+  edit-world:
+    gui-size: 27
+    title: "Welt bearbeiten"
+    position: middle
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-3:
+        material: "%player_head%"
+        title: "Freunde einladen"
+        action:
+          trigger: "open-gui"
+          gui-id: "invited-friends"
+      slot-5:
+        material: "NAME_TAG"
+        title: "Welt-Name ändern"
+        action:
+          trigger: "command"
+          # Öffnet ein Dialog-Fenster (Minecraft Dialog-API, 1.21.6+)
+          # zur Texteingabe des neuen Namens, kein GUI-Wechsel nötig.
+          command: "nav my-world rename %world%"
+      slot-9:
+        material: "BARRIER"
+        title: "Löschen"
+        action:
+          trigger: "open-gui"
+          gui-id: "confirm"
+          params:
+            confirm-command: "nav my-world delete %world%"
+
+  # Schritt 1 von 2 beim Welt-Erstellen: World-Type auswählen.
+  # Nach Auswahl wird automatisch zu "select-server" weitergeleitet,
+  # die Auswahl (world-type) bleibt in der Spieler-Session gespeichert
+  # und wird später beim finalen Command in select-server ausgelesen.
+  create-world:
+    gui-size: 27
+    title: "Welt erstellen"
+    position: middle
+    slots:
+      slot-3:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-5:
+        material: "FEATHER"
+        title: "Void"
+        action:
+          trigger: "select"
+          select-id: "world-type"
+          select-value: "VOID"
+          gui-id: "select-server" # nach Auswahl direkt weiter zum nächsten GUI
+      slot-7:
+        material: "GRASS_BLOCK"
+        title: "Flatworld"
+        action:
+          trigger: "select"
+          select-id: "world-type"
+          select-value: "FLAT"
+          gui-id: "select-server" # nach Auswahl direkt weiter zum nächsten GUI
+
+  # Schritt 2 von 2 beim Welt-Erstellen: Server auswählen.
+  # Führt %selection:world-type% (aus create-world) und
+  # %selection:server% (aus diesem GUI) im finalen Command zusammen.
+  select-server:
+    gui-size: 27
+    title: "Server auswählen"
+    position: middle
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-range:
+        from: 3
+        to: 8 # keine zweite Seite, da wenige Server erwartet werden - sonst Abschneiden bekannter Kompromiss
+        source: "servers" # Plugin holt sich intern die Liste verfügbarer Server
+        material: "GRASS_BLOCK"
+        title: "%server_name%" # Anzeigename pro generiertem Item
+        action:
+          trigger: "select"
+          select-id: "server"
+          select-value: "%server_id%" # interne Server-ID (nicht der Anzeigename!)
+          gui-id: "confirm"
+          params:
+            # /nav create <world-type> <server-id>
+            # Weltname wird NICHT übergeben, sondern serverseitig automatisch
+            # generiert im Format <spieler>-<id>
+            confirm-command: "nav create %selection:world-type% %selection:server%"
+
+  invited-worlds:
+    gui-size: 54
+    title: "Eingeladene Welten"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+
+  tickets:
+    gui-size: 54
+    title: "Tickets"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-9:
+        material: "CAULDRON"
+        title: "Archivierte Tickets"
+        action:
+          trigger: "open-gui"
+          gui-id: "archived-tickets"
+
+  archived-tickets:
+    gui-size: 54
+    title: "Archivierte Tickets"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+
+  # Zeigt bereits für %world% eingeladene Spieler als Köpfe an
+  # (source: invited-players, WELT-spezifisch, nicht global).
+  # Rechtsklick entfernt die Einladung sofort.
+  invited-friends:
+    gui-size: 54
+    title: "Freunde ansehen"
+    position: bottom # Zeilen-Notation (slot-1/slot-9) liegt hier auf echten Slots 45-53
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-9:
+        material: "ANVIL"
+        title: "Spieler suchen"
+        action:
+          trigger: "open-gui"
+          gui-id: "select-friend"
+      slot-range:
+        from: 0
+        to: 44 # endet bewusst VOR slot-1/slot-9 (45-53), keine Kollision
+        source: "invited-players" # nur Spieler, die für DIESE Welt (%world%) bereits eingeladen sind
+        material: "%player_head%"
+        title: "%target_player_name%"
+        action:
+          right-click:
+            trigger: "command"
+            command: "nav my-worlds remove %world% %target_player_name%"
+            # kein left-click definiert: Linksklick auf bereits eingeladene Spieler tut bewusst nichts.
+
+  # Zeigt bereits für %world% zum Bauen berechtigte Spieler als Köpfe an.
+  # Rechtsklick entfernt die Bau-Berechtigung sofort.
+  trusted-friends:
+    gui-size: 54
+    title: "Bauzugriff verwalten"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-9:
+        material: "ANVIL"
+        title: "Spieler suchen"
+        action:
+          trigger: "anvil-input"
+          anvil-title: "Spielername eingeben"
+          gui-id: "select-friend"
+          param-key: "search"
+      slot-range:
+        from: 0
+        to: 44
+        source: "trusted-players"
+        material: "%player_head%"
+        title: "%target_player_name%"
+        action:
+          right-click:
+            trigger: "command"
+            command: "nav my-worlds untrust %world% %target_player_name%"
+
+  # Zeigt ALLE auf dem Server registrierten Spieler (laut LuckPerms),
+  # gefiltert nach dem in invited-friends eingegebenen Suchbegriff.
+  # Linksklick fügt den Spieler als Sichtzugriff hinzu.
+  # Rechtsklick vergibt Bau-Rechte.
+  select-friend:
+    gui-size: 54
+    title: "Spieler auswählen"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-range:
+        from: 0
+        to: 44
+        source: "luckperms-players" # alle registrierten Spieler laut LuckPerms
+        filter: "%param:search%" # Suchbegriff aus dem anvil-input in invited-friends
+        material: "%player_head%"
+        title: "%target_player_name%"
+        action:
+          left-click:
+            trigger: "open-gui"
+            gui-id: "edit-friend"
+            params:
+              target_player_name: "%target_player_name%"
+          right-click:
+            trigger: "open-gui"
+            gui-id: "edit-friend"
+            params:
+              target_player_name: "%target_player_name%"
+  
+
+  # 1 2 3 4 5 6 7 8 9
+  # 1 - 3 - 5 - 7 - -
+
+  # wir müssen neue befehle ändern bzw hinzufügen
+
+  # aktuelle befehle:
+  # /nav my-worlds trust <welt> <spieler>
+  # /nav my-worlds untrust <welt> <spieler>
+
+  # neuer befehl muss geändert werden:
+  # /nav my-worlds invite <welt> <spieler> // lädt den spieler ein, hat aber nur visit rechte also kein bauen, ist aber im creative
+  # /nav my-worlds remove <welt> <spieler> // entfernt den spieler aus der welt, er kann es nicht mehr unter dem nav gui sehen, er erhält auch keine bau rechte mehr
+  # /nav my-worlds trust <welt> <spieler> // gibt dem spieler die rechte in der welt zu bauen, der spieler muss aber eingeladen sein, sonst geht es nicht
+  # /nav my-worlds untrust <welt> <spieler> // entfernt die bau rechte vom spieler, der spieler ist aber immer noch eingeladen und kann die welt sehen. Er hat danach immernoch visit rechte, aber keine bau rechte mehr. 
+
+  edit-friend:
+    gui-size: 27
+    title: "Spieler bearbeiten"
+    position: middle
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-3:
+        action:
+          trigger: "toggle"
+          toggle-id: "world-permission"     # Schlüssel, unter dem der aktuelle Zustand pro Spieler+Welt gespeichert wird
+          start-state: "visit"               # mit welchem State begonnen wird, wenn noch nichts gesetzt ist
+          states:
+            visit:
+              material: "OBSERVER"
+              title: "Visit Rechte"
+              command: "nav my-worlds invite %world% %target_player_name%"
+              next: "build"                   # welcher State nach diesem Klick folgt
+            build:
+              material: "WOODEN_AXE"
+              title: "Build Rechte"
+              command: "nav my-worlds trust %world% %target_player_name%"
+              next: "visit"                    # zurück zum ersten State (Kreislauf)
+      slot-5:
+        material: "%player_head%"
+        title: "%target_player_name%"
+        lore:
+          - "Spieler hat folgende Rechte:"
+          - "%selection:world-permission%"
+        action:
+          trigger: "open-gui"
+          gui-id: "select-friend"
+      slot-7:
+        material: "BARRIER"
+        title: "Entfernen"
+        action:
+          trigger: "open-gui"
+          gui-id: "confirm"
+          params:
+            confirm-command: "nav my-worlds remove %world% %target_player_name%"

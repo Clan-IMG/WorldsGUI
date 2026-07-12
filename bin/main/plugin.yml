@@ -14,7 +14,7 @@ commands:
   nav:
     description: Öffnet die WorldsGUI Navigation
     permission: worldsgui.command.nav
-    usage: /nav [create|delete|join|my-world|confirm|customer|setspawn|status|rename|icon]
+    usage: /nav [create|delete|join|my-world|setspawn|status|rename|icon]
   setspawn:
     description: Setzt den Spawn deiner ausgewählten Welt
     permission: worldsgui.command.setspawn
@@ -27,6 +27,10 @@ commands:
     description: Ändert das Icon der ausgewählten Welt
     permission: worldsgui.command.icon
     usage: /icon [material]
+  status:
+    description: Zeigt den Status an
+    permission: worldsgui.command.status
+    usage: /status
   verify:
     description: Verifiziert deinen Minecraft-Namen mit 4-stelligem Code aus dem Dashboard
     permission: worldsgui.command.verify
@@ -35,9 +39,9 @@ commands:
     description: Entfernt deine Minecraft-Verifizierung
     permission: worldsgui.command.unverify
     usage: /unverify
-  login:
+  join:
     description: Wechselt die Konsole in einen Spieler-Modus
-    usage: /login <player>
+    usage: /join <player>
   exit:
     description: Beendet den Spieler-Modus der Konsole
     usage: /exit
@@ -50,25 +54,61 @@ permissions:
     description: Erlaubt /nav
     default: op
   worldsgui.command.nav.create:
-    description: Erlaubt /nav create
+    description: Erlaubt /nav create (nur wenn dem Auftrag zugewiesen)
     default: op
   worldsgui.command.nav.delete:
     description: Erlaubt /nav delete (archiviert die Welt)
     default: op
   worldsgui.command.nav.confirm:
-    description: Erlaubt /nav confirm
+    description: Erlaubt /nav confirm <code>
     default: op
-  worldsgui.command.nav.nav.confirm:
-    description: Legacy-Alias für /nav confirm
+  worldsgui.command.nav.join:
+    description: Erlaubt /nav join (enable/disable)
     default: op
-  worldsgui.command.nav.remove:
-    description: Erlaubt /nav customer remove
+  worldsgui.command.nav.join.enable:
+    description: Erlaubt /nav join enable
     default: op
-  worldsgui.command.nav.trust:
-    description: Erlaubt /nav customer trust
+  worldsgui.command.nav.join.disable:
+    description: Erlaubt /nav join disable
     default: op
-  worldsgui.command.nav.untrust:
-    description: Erlaubt /nav customer untrust
+  worldsgui.command.nav.my-world:
+    description: Erlaubt /nav my-world
+    default: op
+  worldsgui.command.nav.my-world.create:
+    description: Erlaubt /nav my-world create (Cooldown 5 Min., außer worldsgui.admin)
+    default: op
+  worldsgui.command.nav.my-world.delete:
+    description: Erlaubt /nav my-world delete [confirm]
+    default: op
+  worldsgui.command.nav.my-world.open:
+    description: Erlaubt /nav my-world open
+    default: op
+  worldsgui.command.nav.my-world.closed:
+    description: Erlaubt /nav my-world closed
+    default: op
+  worldsgui.command.nav.my-world.invite:
+    description: Erlaubt /nav my-worlds invite <world-name> <player>
+    default: op
+  worldsgui.command.nav.my-world.remove:
+    description: Erlaubt /nav my-worlds remove <world-name> <player>
+    default: op
+  worldsgui.command.nav.my-world.trust:
+    description: Erlaubt /nav my-worlds trust (nur für eingeladene Spieler)
+    default: op
+  worldsgui.command.nav.my-world.untrust:
+    description: Erlaubt /nav my-worlds untrust
+    default: op
+  worldsgui.command.nav.my-world.rename:
+    description: Erlaubt /nav my-world rename
+    default: op
+  worldsgui.command.nav.my-world.icon:
+    description: Erlaubt /nav my-world icon
+    default: op
+  worldsgui.command.nav.my-world.clone:
+    description: Erlaubt /nav my-world clone <world-name> [player]
+    default: op
+  worldsgui.command.nav.my-world.import:
+    description: Erlaubt /nav my-world import <world-name> <player>
     default: op
   worldsgui.command.nav.setspawn:
     description: Erlaubt /nav setspawn
@@ -82,6 +122,18 @@ permissions:
   worldsgui.command.nav.icon:
     description: Erlaubt /nav icon
     default: op
+  worldsgui.command.nav.invite:
+    description: Erlaubt /nav customer invite <world> <player>
+    default: op
+  worldsgui.command.nav.remove:
+    description: Erlaubt /nav customer remove <world> <player>
+    default: op
+  worldsgui.command.nav.trust:
+    description: Erlaubt /nav customer trust <player>
+    default: op
+  worldsgui.command.nav.untrust:
+    description: Erlaubt /nav customer untrust <player>
+    default: op
   worldsgui.command.setspawn:
     description: Erlaubt /setspawn
     default: op
@@ -91,6 +143,9 @@ permissions:
   worldsgui.command.icon:
     description: Erlaubt /icon
     default: op
+  worldsgui.command.status:
+    description: Erlaubt /status
+    default: op
   worldsgui.command.verify:
     description: Erlaubt /verify
     default: op
@@ -98,5 +153,5 @@ permissions:
     description: Erlaubt /unverify
     default: op
   worldsgui.admin:
-    description: Sieht private Welten in der Compass-Ansicht und darf sie betreten
+    description: Hat alle Rechte, sieht alle Aufträge/Welten sowie private Welten bei Einladung, Cooldown bei my-world create betrifft diese Permission nicht
     default: op

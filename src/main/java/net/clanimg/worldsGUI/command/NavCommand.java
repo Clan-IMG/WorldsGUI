@@ -40,7 +40,11 @@ public final class NavCommand implements TabExecutor {
         switch (sub) {
             case "create" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav create <ticketId>");
+                    player.sendMessage("Usage: /nav create <ticketId>  ODER  /nav create <world-type> <server-id>");
+                    return true;
+                }
+                if (args.length >= 3) {
+                    guiManager.executeNavCreateWizard(player, args[1], args[2]);
                     return true;
                 }
                 guiManager.executeNavTicketCreate(player, args[1]);
@@ -67,9 +71,9 @@ public final class NavCommand implements TabExecutor {
                 }
                 return true;
             }
-            case "my-world" -> {
+            case "my-world", "my-worlds" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav my-world <create|delete|open|closed|trust|untrust|rename|icon> ...");
+                    player.sendMessage("Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...");
                     return true;
                 }
                 String myWorldSub = args[1].toLowerCase(Locale.ROOT);
@@ -108,7 +112,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "trust" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world trust <world-name> <player>");
+                            player.sendMessage("Usage: /nav my-worlds trust <world-name> <player>");
                             return true;
                         }
                         guiManager.executeNavMyWorldTrust(player, args[2], args[3]);
@@ -116,10 +120,26 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "untrust" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world untrust <world-name> <player>");
+                            player.sendMessage("Usage: /nav my-worlds untrust <world-name> <player>");
                             return true;
                         }
                         guiManager.executeNavMyWorldUntrust(player, args[2], args[3]);
+                        return true;
+                    }
+                    case "invite" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-worlds invite <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldInvite(player, args[2], args[3]);
+                        return true;
+                    }
+                    case "remove" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-worlds remove <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldRemove(player, args[2], args[3]);
                         return true;
                     }
                     case "rename" -> {
@@ -138,8 +158,25 @@ public final class NavCommand implements TabExecutor {
                         guiManager.executeNavMyWorldIcon(player, args[2], new String[] { args[3] });
                         return true;
                     }
+                    case "clone" -> {
+                        if (args.length < 3) {
+                            player.sendMessage("Usage: /nav my-world clone <world-name> [player]");
+                            return true;
+                        }
+                        String targetPlayer = args.length >= 4 ? args[3] : null;
+                        guiManager.executeNavMyWorldClone(player, args[2], targetPlayer);
+                        return true;
+                    }
+                    case "import" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-world import <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldImport(player, args[2], args[3]);
+                        return true;
+                    }
                     default -> {
-                        player.sendMessage("Usage: /nav my-world <create|delete|open|closed|trust|untrust|rename|icon> ...");
+                        player.sendMessage("Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...");
                         return true;
                     }
                 }
@@ -154,11 +191,19 @@ public final class NavCommand implements TabExecutor {
             }
             case "customer" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav customer <remove|trust|untrust> ...");
+                    player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
                     return true;
                 }
                 String customerSub = args[1].toLowerCase(Locale.ROOT);
                 switch (customerSub) {
+                    case "invite" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav customer invite <world> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavCustomerInvite(player, args[2], args[3]);
+                        return true;
+                    }
                     case "remove" -> {
                         if (args.length < 4) {
                             player.sendMessage("Usage: /nav customer remove <world> <player>");
@@ -184,7 +229,7 @@ public final class NavCommand implements TabExecutor {
                         return true;
                     }
                     default -> {
-                        player.sendMessage("Usage: /nav customer <remove|trust|untrust> ...");
+                        player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
                         return true;
                     }
                 }
@@ -240,12 +285,12 @@ public final class NavCommand implements TabExecutor {
             return filterPrefix(List.of("enable", "disable"), args[1]);
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("my-world")) {
-            return filterPrefix(List.of("create", "delete", "open", "closed", "trust", "untrust", "rename", "icon"), args[1]);
+        if (args.length == 2 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))) {
+            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "invite", "remove", "trust", "untrust", "rename", "icon"), args[1]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("customer")) {
-            return filterPrefix(List.of("remove", "trust", "untrust"), args[1]);
+            return filterPrefix(List.of("invite", "remove", "trust", "untrust"), args[1]);
         }
 
         if (args.length == 2) {
@@ -257,7 +302,10 @@ public final class NavCommand implements TabExecutor {
                 return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[1]);
             }
             if (sub.equals("create")) {
-                return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[1]);
+                List<String> suggestions = new ArrayList<>(guiManager.listOpenTicketOrderIds((Player) sender));
+                suggestions.add("VOID");
+                suggestions.add("FLAT");
+                return filterPrefix(suggestions, args[1]);
             }
         }
 
@@ -265,12 +313,40 @@ public final class NavCommand implements TabExecutor {
             return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[2]);
         }
 
-        if (args.length == 3 && args[0].equalsIgnoreCase("my-world") && args[1].equalsIgnoreCase("delete")) {
+        if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("delete")) {
             return List.of("confirm");
         }
 
-        if (args.length == 3 && args[0].equalsIgnoreCase("my-world") && args[1].equalsIgnoreCase("create")) {
+        if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("create")) {
             return List.of("<new-name>");
+        }
+
+        if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("clone")) {
+            return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[2]);
+        }
+
+        if (args.length == 4 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("clone")) {
+            return filterPrefix(guiManager.listCloneTargetPlayerNames((Player) sender), args[3]);
+        }
+
+        if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("import")) {
+            return filterPrefix(guiManager.listImportableWorldNames((Player) sender), args[2]);
+        }
+
+        if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))
+            && (args[1].equalsIgnoreCase("invite") || args[1].equalsIgnoreCase("remove")
+                || args[1].equalsIgnoreCase("trust") || args[1].equalsIgnoreCase("untrust"))) {
+            return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[2]);
+        }
+
+        if (args.length == 4 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))
+            && (args[1].equalsIgnoreCase("invite") || args[1].equalsIgnoreCase("remove")
+                || args[1].equalsIgnoreCase("trust") || args[1].equalsIgnoreCase("untrust"))) {
+            return filterPrefix(guiManager.listCloneTargetPlayerNames((Player) sender), args[3]);
+        }
+
+        if (args.length == 4 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("import")) {
+            return filterPrefix(guiManager.listCloneTargetPlayerNames((Player) sender), args[3]);
         }
 
         if (args[0].equalsIgnoreCase("customer")) {
@@ -305,6 +381,9 @@ public final class NavCommand implements TabExecutor {
                 return List.of("<material>");
             }
             if (sub.equals("create")) {
+                if (args[1].equalsIgnoreCase("VOID") || args[1].equalsIgnoreCase("FLAT")) {
+                    return filterPrefix(guiManager.listAllowedServerNames(), args[2]);
+                }
                 return filterPrefix(guiManager.listOpenTicketOrderIds((Player) sender), args[2]);
             }
         }
