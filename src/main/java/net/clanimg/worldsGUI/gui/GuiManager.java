@@ -162,6 +162,7 @@ public final class GuiManager {
     private final Set<UUID> suppressedChatFeedbackPlayers = ConcurrentHashMap.newKeySet();
     private volatile boolean warnedMissingLocalServerId;
     private volatile boolean warnedMissingExplicitServerIdForAutoCreate;
+    private volatile boolean warnedBlockedLocalServerForAutoCreate;
     private volatile GuiConfig guiConfig;
     private final PlayerSessionManager playerSessions = new PlayerSessionManager();
     private final TriggerDispatcher triggerDispatcher;
@@ -914,6 +915,7 @@ public final class GuiManager {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String resolvedRole = null;
+            boolean verified = false;
             boolean hasOpenTicket = false;
             try {
                 String query = URLEncoder.encode(playerName, StandardCharsets.UTF_8);
@@ -927,6 +929,7 @@ public final class GuiManager {
                 String body = response.body() == null ? "" : response.body();
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                    verified = jsonBooleanFieldIsTrue(body, "verified");
                     hasOpenTicket = hasAssignedOpenTicket(playerName);
                 }
             } catch (Exception ex) {
@@ -934,6 +937,7 @@ public final class GuiManager {
             }
 
             String finalRole = resolvedRole;
+            boolean finalVerified = verified;
             boolean finalHasOpenTicket = hasOpenTicket;
             if (finalRole == null) {
                 return;
@@ -941,7 +945,7 @@ public final class GuiManager {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 Player online = Bukkit.getPlayer(player.getUniqueId());
                 if (online != null && online.isOnline()) {
-                    applyLuckPermsRole(online, finalRole, true, finalHasOpenTicket, false);
+                    applyLuckPermsRole(online, finalRole, finalVerified, finalHasOpenTicket, false);
                 }
             });
         });
@@ -1567,6 +1571,11 @@ public final class GuiManager {
             return;
         }
 
+        if (isBlockedServerName(normalizedServer)) {
+            player.sendMessage("§cDieser Server ist für neue Welten gesperrt: §f" + normalizedServer);
+            return;
+        }
+
         List<String> selectableServers = resolveSelectableServerNames();
         if (!selectableServers.isEmpty() && selectableServers.stream().noneMatch(server -> server.equalsIgnoreCase(normalizedServer))) {
             player.sendMessage("§cUnbekannter Server: §f" + normalizedServer);
@@ -1759,7 +1768,18 @@ public final class GuiManager {
     }
 
     public void ensurePersonalFlatWorldForJoin(Player player) {
-        String localServer = resolveExplicitLocalServerId();
+        String localServer = resolveLocalServerId();
+
+        if (!localServer.isBlank() && isBlockedServerName(localServer)) {
+            if (!warnedBlockedLocalServerForAutoCreate) {
+                warnedBlockedLocalServerForAutoCreate = true;
+                plugin.getLogger().warning(
+                    "Auto-Welt-Erstellung beim Join ist für diesen Server deaktiviert, " +
+                    "weil api.blocked-server-names die lokale Server-ID enthält: " + localServer
+                );
+            }
+            return;
+        }
 
         List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
         boolean hasEligibleWorld;
@@ -2402,6 +2422,13 @@ public final class GuiManager {
         }
 
         if (args.length == 0) {
+            try {
+                showRenameInputDialog(player, worldName);
+                return;
+            } catch (Throwable t) {
+                plugin.getLogger().warning("Dialog-API für Rename fehlgeschlagen (" + t.getMessage() + "), nutze Chat-Fallback.");
+            }
+
             pendingInputs.put(player.getUniqueId(), new PendingInput(PendingType.RENAME, worldName));
             send(player, "rename-prompt");
             return;
@@ -2409,6 +2436,49 @@ public final class GuiManager {
 
         String newName = String.join(" ", args).trim();
         applyRename(player, worldName, newName);
+    }
+
+    private void showRenameInputDialog(Player player, String worldName) {
+        Component title = parseFormattedMessage("&7Welt-Name ändern");
+
+        TextDialogInput textInput = DialogInput.text("input", title)
+            .initial("")
+            .maxLength(32)
+            .build();
+
+        DialogActionCallback callback = (DialogResponseView view, net.kyori.adventure.audience.Audience audience) -> {
+            String input = view.getText("input");
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(player.getUniqueId());
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+                applyRename(online, worldName, input == null ? "" : input.trim());
+            });
+        };
+
+        ActionButton confirmButton = ActionButton.create(
+            Component.text("Bestätigen"),
+            Component.empty(),
+            150,
+            DialogAction.customClick(callback, ClickCallback.Options.builder().build())
+        );
+
+        DialogBase base = DialogBase.create(
+            title,
+            title,
+            true,
+            false,
+            DialogBase.DialogAfterAction.CLOSE,
+            List.of(),
+            List.of(textInput)
+        );
+
+        Dialog dialog = Dialog.create(factory -> factory.empty()
+            .base(base)
+            .type(DialogType.notice(confirmButton)));
+
+        player.showDialog(dialog);
     }
 
     private void handleIconCommand(Player player, String[] args) {
@@ -2761,6 +2831,11 @@ public final class GuiManager {
         String targetServer = requestedServer != null && !requestedServer.isBlank()
             ? requestedServer.trim()
             : resolveTargetCreationServer();
+        if (isBlockedServerName(targetServer)) {
+            player.sendMessage("§cAuf diesem Server können keine neuen Welten erstellt werden: §f" + targetServer);
+            return;
+        }
+
         String localServer = resolveLocalServerId();
         boolean shouldCreateLocally = targetServer.isBlank()
             || localServer.isBlank()
@@ -3516,11 +3591,11 @@ public final class GuiManager {
     }
 
     public String resolveLocalServerIdentifier() {
-        return resolveExplicitLocalServerId();
+        return resolveLocalServerId();
     }
 
     private String resolveTargetCreationServer() {
-        String localServer = resolveExplicitLocalServerId();
+        String localServer = resolveLocalServerId();
         List<String> selectableServers = resolveSelectableServerNames();
         if (selectableServers.isEmpty()) {
             return localServer == null ? "" : localServer;
@@ -3550,10 +3625,17 @@ public final class GuiManager {
         return out;
     }
 
+    private boolean isBlockedServerName(String serverId) {
+        if (serverId == null || serverId.isBlank()) {
+            return false;
+        }
+        List<String> blockedServers = resolveConfiguredBlockedServerNames();
+        return blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, serverId));
+    }
+
     private List<String> resolveSelectableServerNames() {
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
-        // Only use explicit cloud/config identity — never the Linux hostname fallback.
-        String localServer = resolveExplicitLocalServerId();
+        String localServer = resolveLocalServerId();
 
         boolean localBlocked = !localServer.isBlank()
             && blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, localServer));
@@ -3615,8 +3697,7 @@ public final class GuiManager {
     }
 
     private List<String> resolveFallbackServerNames(List<String> blockedServers) {
-        // Only use explicit cloud/config identity — never the Linux hostname fallback.
-        String local = resolveExplicitLocalServerId();
+        String local = resolveLocalServerId();
         if (local == null || local.isBlank()) {
             return List.of();
         }
@@ -3749,11 +3830,12 @@ public final class GuiManager {
         String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
         String playerId = URLEncoder.encode(player.getUniqueId().toString(), StandardCharsets.UTF_8);
         String endpoint = normalizedController + "/v0/players/connect?player_id=" + playerId;
-        String payload = "{\"server_id\":\"" + targetServer + "\"}";
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
             boolean alreadyConnected = false;
+            String effectiveTargetServer = resolveEffectiveConnectTargetServer(targetServer);
+            String payload = "{\"server_id\":\"" + effectiveTargetServer + "\"}";
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(endpoint))
@@ -3767,7 +3849,11 @@ public final class GuiManager {
                 HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
                 String body = response.body() == null ? "" : response.body();
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "success")) {
-                    message = "§aDu wirst auf §f" + targetServer + " §averbunden ...";
+                    if (!effectiveTargetServer.equalsIgnoreCase(targetServer)) {
+                        message = "§eZielserver §f" + targetServer + " §eist offline. Verbinde stattdessen zu §f" + effectiveTargetServer + "§e ...";
+                    } else {
+                        message = "§aDu wirst auf §f" + effectiveTargetServer + " §averbunden ...";
+                    }
                 } else {
                     String detail = extractJsonString(body, "message");
                     if (detail == null || detail.isBlank()) {
@@ -3800,6 +3886,47 @@ public final class GuiManager {
                 }
             });
         });
+    }
+
+    private String resolveEffectiveConnectTargetServer(String requestedServer) {
+        String normalizedRequested = normalizeServerIdentifier(requestedServer);
+        if (normalizedRequested.isBlank()) {
+            return requestedServer;
+        }
+
+        List<String> onlineServers = repository.listOnlineServerNames(20);
+        if (onlineServers.isEmpty()) {
+            return requestedServer;
+        }
+
+        for (String online : onlineServers) {
+            if (online != null && online.equalsIgnoreCase(normalizedRequested)) {
+                return online;
+            }
+        }
+
+        String requestedBase = stripInstanceSuffix(normalizedRequested);
+        if (requestedBase.isBlank()) {
+            return requestedServer;
+        }
+
+        List<String> siblings = new ArrayList<>();
+        for (String online : onlineServers) {
+            if (online == null || online.isBlank()) {
+                continue;
+            }
+            String onlineBase = stripInstanceSuffix(normalizeServerIdentifier(online));
+            if (!onlineBase.isBlank() && onlineBase.equalsIgnoreCase(requestedBase)) {
+                siblings.add(online);
+            }
+        }
+
+        if (siblings.isEmpty()) {
+            return requestedServer;
+        }
+
+        siblings.sort(String.CASE_INSENSITIVE_ORDER);
+        return siblings.get(0);
     }
 
     private void applyPreferredGameMode(Player player, WorldEntry entry) {

@@ -55,7 +55,7 @@
 #   params:           # optional, Key-Value-Map. Wird beim Öffnen des Ziel-GUIs
 #                      # genutzt, um Platzhalter im Ziel-GUI zu ersetzen
 #                      # (z.B. %confirm-command% im "confirm"-GUI).
-#     confirm-command: "nav my-world delete %world%"
+#     confirm-command: "nav my-world delete %world% confirm"
 #
 # trigger: "return"
 #   (keine weiteren Felder nötig)
@@ -178,7 +178,7 @@ example-gui:
         trigger: "open-gui"
         gui-id: "confirm"
         params:
-          confirm-command: "nav my-world delete %world%"
+          confirm-command: "nav my-world delete %world% confirm"
     slot-8:
       material: "PAPER"
       title: "Wähle mich"
@@ -261,6 +261,7 @@ guis:
           # Öffnet ein Dialog-Fenster (Minecraft Dialog-API, 1.21.6+)
           # zur Texteingabe des neuen Namens, kein GUI-Wechsel nötig.
           command: "nav my-world rename %world%"
+          chat-feedback: false # keine Chat-Nachricht, wenn der Spieler hier was klickt
       slot-9:
         material: "BARRIER"
         title: "Löschen"
@@ -268,7 +269,7 @@ guis:
           trigger: "open-gui"
           gui-id: "confirm"
           params:
-            confirm-command: "nav my-world delete %world%"
+            confirm-command: "nav my-world delete %world% confirm"
 
   # Schritt 1 von 2 beim Welt-Erstellen: World-Type auswählen.
   # Nach Auswahl wird automatisch zu "select-server" weitergeleitet,

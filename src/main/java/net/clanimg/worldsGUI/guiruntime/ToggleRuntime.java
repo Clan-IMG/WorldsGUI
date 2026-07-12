@@ -36,13 +36,6 @@ public final class ToggleRuntime {
             }
         }
 
-        if (session != null && trigger.toggleId() != null && !trigger.toggleId().isBlank()) {
-            String global = session.selection(trigger.toggleId());
-            if (global != null && !global.isBlank() && trigger.toggleStates().containsKey(global)) {
-                return global;
-            }
-        }
-
         String start = trigger.toggleStartState();
         if (start != null && trigger.toggleStates().containsKey(start)) {
             return start;
