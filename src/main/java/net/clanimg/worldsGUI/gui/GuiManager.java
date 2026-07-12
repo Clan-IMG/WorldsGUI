@@ -1611,10 +1611,15 @@ public final class GuiManager {
 
         int confirmCode = ThreadLocalRandom.current().nextInt(100, 1000);
         long expiresAt = System.currentTimeMillis() + 30_000L;
-        PendingDeleteConfirmation pending = new PendingDeleteConfirmation(worldName, confirmCode, expiresAt);
+        boolean archiveOnly = isTicketWorld(entry);
+        PendingDeleteConfirmation pending = new PendingDeleteConfirmation(worldName, confirmCode, expiresAt, archiveOnly);
         pendingDeleteByPlayer.put(player.getUniqueId(), pending);
 
-        player.sendMessage("§eArchivierung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        if (archiveOnly) {
+            player.sendMessage("§eArchivierung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        } else {
+            player.sendMessage("§eLöschung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        }
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             PendingDeleteConfirmation current = pendingDeleteByPlayer.get(player.getUniqueId());
@@ -1660,7 +1665,11 @@ public final class GuiManager {
         }
 
         pendingDeleteByPlayer.remove(player.getUniqueId());
-        deleteWorld(player, pending.worldName());
+        if (pending.archiveOnly()) {
+            archiveWorld(player, pending.worldName());
+        } else {
+            deleteWorld(player, pending.worldName());
+        }
     }
 
     public List<String> listOwnedWorldNames(Player player) {
@@ -2114,6 +2123,35 @@ public final class GuiManager {
 
     public boolean executeDashboardJoin(Player player, String worldName) {
         return joinWorld(player, worldName, false);
+    }
+
+    public void handlePlayerJoin(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String pendingWorldName = repository.consumePendingWorldTransfer(player.getName());
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(player.getUniqueId());
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+
+                if (pendingWorldName != null && !pendingWorldName.isBlank()) {
+                    Optional<WorldEntry> pendingEntry = repository.findByWorldName(pendingWorldName);
+                    if (pendingEntry.isPresent()) {
+                        if (joinWorldLocally(online, pendingEntry.get(), true)) {
+                            return;
+                        }
+                        online.sendMessage("§cDie Zielwelt konnte auf diesem Server nicht geladen werden: §f" + pendingWorldName);
+                        return;
+                    }
+                }
+
+                ensurePersonalFlatWorldForJoin(online);
+            });
+        });
     }
 
     public void notifyCustomerActiveTicketOnJoin(Player player) {
@@ -3180,6 +3218,24 @@ public final class GuiManager {
         });
     }
 
+    private void archiveWorld(Player player, String worldName) {
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+
+        repository.archiveWorld(worldName);
+        refreshWorldGuardProtection(worldName);
+        send(player, "delete-success", "%world%", worldName);
+    }
+
     private boolean isWorldReallyDeleted(String worldName) {
         if (Bukkit.getWorld(worldName) != null) {
             return false;
@@ -3832,6 +3888,8 @@ public final class GuiManager {
         String endpoint = normalizedController + "/v0/players/connect?player_id=" + playerId;
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            repository.upsertPendingWorldTransfer(player.getName(), entry.worldName());
+
             String message;
             boolean alreadyConnected = false;
             String effectiveTargetServer = resolveEffectiveConnectTargetServer(targetServer);
@@ -3855,6 +3913,7 @@ public final class GuiManager {
                         message = "§aDu wirst auf §f" + effectiveTargetServer + " §averbunden ...";
                     }
                 } else {
+                    repository.upsertPendingWorldTransfer(player.getName(), null);
                     String detail = extractJsonString(body, "message");
                     if (detail == null || detail.isBlank()) {
                         detail = extractJsonString(body, "error");
@@ -3872,6 +3931,7 @@ public final class GuiManager {
                     }
                 }
             } catch (Exception ex) {
+                repository.upsertPendingWorldTransfer(player.getName(), null);
                 message = "§cServer-Wechsel fehlgeschlagen: §f" + ex.getMessage();
             }
 
@@ -4481,7 +4541,7 @@ public final class GuiManager {
         openEditWorldGui(player, holder.worldName());
     }
 
-    private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs) {
+    private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs, boolean archiveOnly) {
     }
 
     private record PendingTicketWorld(String worldName, List<String> customers, boolean archived) {

@@ -469,6 +469,45 @@ public final class WorldsRepository {
         }
     }
 
+    public void upsertPendingWorldTransfer(String playerName, String worldName) {
+        JsonObject body = new JsonObject();
+        body.addProperty("playerName", playerName);
+        if (worldName == null || worldName.isBlank()) {
+            body.add("worldName", null);
+        } else {
+            body.addProperty("worldName", worldName);
+        }
+
+        try {
+            ApiResponse response = request("PUT", "/worlds/presence/pending-world", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("pending-world", "Pending-World API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            warnThrottled("pending-world-ex", "Fehler beim Aktualisieren der Pending-World via API: " + ex.getMessage());
+        }
+    }
+
+    public String consumePendingWorldTransfer(String playerName) {
+        JsonObject body = new JsonObject();
+        body.addProperty("playerName", playerName);
+
+        try {
+            ApiResponse response = request("POST", "/worlds/presence/pending-world/consume", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("pending-world-consume", "Pending-World-Consume API Fehler: HTTP " + response.statusCode());
+                return "";
+            }
+
+            JsonObject json = parseObject(response.body());
+            String pendingWorld = getString(json, "pendingWorld", "");
+            return pendingWorld == null ? "" : pendingWorld.trim();
+        } catch (Exception ex) {
+            warnThrottled("pending-world-consume-ex", "Fehler beim Laden der Pending-World via API: " + ex.getMessage());
+            return "";
+        }
+    }
+
     public void upsertServerPresence(String serverName, boolean online, String status, int heartbeatIntervalSeconds) {
         String normalizedServer = serverName == null ? "" : serverName.trim();
         if (normalizedServer.isBlank()) {
