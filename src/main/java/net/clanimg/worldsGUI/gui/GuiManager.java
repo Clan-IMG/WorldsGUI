@@ -870,8 +870,13 @@ public final class GuiManager {
                 );
                 String body = response.body() == null ? "" : response.body();
 
+                boolean alreadyUnverified = jsonBooleanFieldIsTrue(body, "alreadyUnverified");
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     message = "§aMinecraft-Verifizierung wurde entfernt.";
+                    success = true;
+                } else if (alreadyUnverified) {
+                    message = "§eDu bist bereits unverifiziert.";
+                    // No-op: lokale Gruppen trotzdem konsistent auf unverifiziert/default setzen.
                     success = true;
                 } else {
                     String error = extractJsonString(body, "error");
@@ -2927,6 +2932,10 @@ public final class GuiManager {
         ConsoleCommandSender console = Bukkit.getConsoleSender();
         Bukkit.dispatchCommand(console, "mv import " + worldName + " normal");
 
+        // Title sofort zeigen
+        String creatingTitle = plugin.getConfig().getString("messages.with-prefix.create-creating-title", "Welt wird erstellt...");
+        player.sendTitle(creatingTitle, "", 10, 70, 10);
+
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -2982,7 +2991,30 @@ public final class GuiManager {
                 if (notifyWhenVisible) {
                     player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst teleportiert, sobald sie dort sichtbar ist.");
                     openGui(player, "my-worlds");
+                    return;
                 }
+
+                // Nach erfolgreicher Erstellung: Mit Verzögerung teleportieren
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        Player onlinePlayer = Bukkit.getPlayer(player.getUniqueId());
+                        if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                            return;
+                        }
+
+                        World loadedWorld = Bukkit.getWorld(worldName);
+                        if (loadedWorld == null) {
+                            sendWithPrefix(player, "create-failed", "Welt konnte nicht erstellt werden.", "%world%", worldName);
+                            return;
+                        }
+
+                        sendWithPrefix(onlinePlayer, "create-joining-world", "Betrete Welt...");
+                        Location spawn = loadedWorld.getSpawnLocation();
+                        onlinePlayer.teleport(spawn);
+                        applyPreferredGameMode(onlinePlayer, null);
+                    }
+                }.runTaskLater(plugin, 100L); // 5 Sekunden Verzögerung
             }
         }.runTaskLater(plugin, 20L);
     }
@@ -3240,7 +3272,7 @@ public final class GuiManager {
 
         repository.archiveWorld(worldName);
         refreshWorldGuardProtection(worldName);
-        send(player, "delete-success", "%world%", worldName);
+        send(player, "archive-success", "%world%", worldName);
     }
 
     private boolean isWorldReallyDeleted(String worldName) {

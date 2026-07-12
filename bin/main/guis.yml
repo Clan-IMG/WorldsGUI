@@ -262,6 +262,13 @@ guis:
           # zur Texteingabe des neuen Namens, kein GUI-Wechsel nötig.
           command: "nav my-world rename %world%"
           chat-feedback: false # keine Chat-Nachricht, wenn der Spieler hier was klickt
+      slot-7:
+        material: "ENDER_EYE"
+        title: "Welt Spawn setzen"
+        action:
+          trigger: "command"
+          command: "nav setspawn %world%"
+          chat-feedback: false
       slot-9:
         material: "BARRIER"
         title: "Löschen"
