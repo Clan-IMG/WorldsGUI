@@ -7,7 +7,6 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.InetAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -790,22 +789,12 @@ public final class WorldsRepository {
             "CLOUDNET_SERVICE_ID",
             "CLOUDNET_SERVICE_NAME",
             "SERVICE_NAME",
-            "SERVER_NAME",
-            "HOSTNAME"
+            "SERVER_NAME"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
                 return value.trim();
             }
-        }
-
-        try {
-            String host = InetAddress.getLocalHost().getHostName();
-            if (host != null && !host.isBlank()) {
-                return host.trim();
-            }
-        } catch (Exception ignored) {
-            // Best-effort fallback only.
         }
         return "";
     }

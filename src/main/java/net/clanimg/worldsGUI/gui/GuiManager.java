@@ -3375,8 +3375,7 @@ public final class GuiManager {
             "CLOUDNET_SERVICE_ID",
             "CLOUDNET_SERVICE_NAME",
             "SERVICE_NAME",
-            "SERVER_NAME",
-            "HOSTNAME"
+            "SERVER_NAME"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
@@ -3387,11 +3386,11 @@ public final class GuiManager {
     }
 
     public String resolveLocalServerIdentifier() {
-        return resolveLocalServerId();
+        return resolveExplicitLocalServerId();
     }
 
     private String resolveTargetCreationServer() {
-        String localServer = resolveLocalServerId();
+        String localServer = resolveExplicitLocalServerId();
         List<String> selectableServers = resolveSelectableServerNames();
         if (selectableServers.isEmpty()) {
             return localServer == null ? "" : localServer;
@@ -3472,7 +3471,7 @@ public final class GuiManager {
     }
 
     private List<String> resolveFallbackServerNames(List<String> blockedServers) {
-        String local = resolveLocalServerId();
+        String local = resolveExplicitLocalServerId();
         if (local == null || local.isBlank()) {
             return List.of();
         }
