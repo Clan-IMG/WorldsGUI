@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.InetAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -785,7 +786,10 @@ public final class WorldsRepository {
         for (String envKey : List.of(
             "SIMPLECLOUD_SERVER_ID",
             "SIMPLECLOUD_SERVICE_NAME",
+            "SIMPLECLOUD_SERVICE_ID",
+            "CLOUDNET_SERVICE_ID",
             "CLOUDNET_SERVICE_NAME",
+            "SERVICE_NAME",
             "SERVER_NAME",
             "HOSTNAME"
         )) {
@@ -793,6 +797,15 @@ public final class WorldsRepository {
             if (value != null && !value.isBlank()) {
                 return value.trim();
             }
+        }
+
+        try {
+            String host = InetAddress.getLocalHost().getHostName();
+            if (host != null && !host.isBlank()) {
+                return host.trim();
+            }
+        } catch (Exception ignored) {
+            // Best-effort fallback only.
         }
         return "";
     }

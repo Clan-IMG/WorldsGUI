@@ -8,5 +8,6 @@ public enum TriggerType {
     OPEN_GUI,
     RETURN,
     SELECT,
-    ANVIL_INPUT
+    ANVIL_INPUT,
+    TOGGLE
 }

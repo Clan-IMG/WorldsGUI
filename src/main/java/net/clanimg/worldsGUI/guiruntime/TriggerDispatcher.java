@@ -36,6 +36,7 @@ public final class TriggerDispatcher {
             case RETURN -> executeReturn(player, session);
             case SELECT -> executeSelect(player, session, trigger, extra);
             case ANVIL_INPUT -> anvilInputRequester.request(player, session, trigger);
+            case TOGGLE -> executeToggle(player, session, trigger, extra);
         }
     }
 
@@ -94,6 +95,54 @@ public final class TriggerDispatcher {
             session.pushCurrentToHistory();
             session.setCurrentGuiId(trigger.guiId());
             guiOpener.openGui(player, trigger.guiId());
+        }
+    }
+
+    private void executeToggle(Player player, PlayerGuiSession session, GuiTrigger trigger, Map<String, String> extra) {
+        if (trigger.toggleStates().isEmpty()) {
+            return;
+        }
+
+        String currentStateId = ToggleRuntime.currentStateId(trigger, player, session, extra);
+        var state = trigger.toggleStates().get(currentStateId);
+        if (state == null) {
+            return;
+        }
+
+        String scopedId = ToggleRuntime.scopedToggleId(trigger, player, session, extra);
+        if (!scopedId.isBlank()) {
+            session.putSelection(scopedId, currentStateId);
+        }
+        if (trigger.toggleId() != null && !trigger.toggleId().isBlank()) {
+            session.putSelection(trigger.toggleId(), currentStateId);
+        }
+
+        String expanded = PlaceholderExpander.expand(state.command(), player, session, extra);
+        if (expanded == null || expanded.isBlank()) {
+            player.sendMessage("§cDieser Toggle-Command konnte nicht ausgeführt werden (fehlender Wert).");
+            return;
+        }
+
+        commandDispatcher.dispatch(player, expanded);
+
+        String next = state.next();
+        if (next == null || next.isBlank() || !trigger.toggleStates().containsKey(next)) {
+            next = trigger.toggleStartState();
+        }
+        if (next == null || next.isBlank() || !trigger.toggleStates().containsKey(next)) {
+            next = currentStateId;
+        }
+
+        if (!scopedId.isBlank()) {
+            session.putSelection(scopedId, next);
+        }
+        if (trigger.toggleId() != null && !trigger.toggleId().isBlank()) {
+            session.putSelection(trigger.toggleId(), next);
+        }
+
+        String guiId = session.currentGuiId();
+        if (guiId != null && !guiId.isBlank()) {
+            guiOpener.openGui(player, guiId);
         }
     }
 }

@@ -16,6 +16,9 @@ public final class GuiTrigger {
     private final String selectValue;
     private final String anvilTitle;
     private final String paramKey;
+    private final String toggleId;
+    private final String toggleStartState;
+    private final Map<String, GuiToggleState> toggleStates;
 
     private GuiTrigger(
         TriggerType type,
@@ -26,7 +29,10 @@ public final class GuiTrigger {
         String selectId,
         String selectValue,
         String anvilTitle,
-        String paramKey
+        String paramKey,
+        String toggleId,
+        String toggleStartState,
+        Map<String, GuiToggleState> toggleStates
     ) {
         this.type = type;
         this.command = command;
@@ -37,26 +43,33 @@ public final class GuiTrigger {
         this.selectValue = selectValue;
         this.anvilTitle = anvilTitle;
         this.paramKey = paramKey;
+        this.toggleId = toggleId;
+        this.toggleStartState = toggleStartState;
+        this.toggleStates = toggleStates == null ? Map.of() : Map.copyOf(toggleStates);
     }
 
     public static GuiTrigger command(String command, int clicks) {
-        return new GuiTrigger(TriggerType.COMMAND, command, Math.max(1, clicks), null, null, null, null, null, null);
+        return new GuiTrigger(TriggerType.COMMAND, command, Math.max(1, clicks), null, null, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger openGui(String guiId, Map<String, String> params) {
-        return new GuiTrigger(TriggerType.OPEN_GUI, null, 1, guiId, params, null, null, null, null);
+        return new GuiTrigger(TriggerType.OPEN_GUI, null, 1, guiId, params, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger returnTrigger() {
-        return new GuiTrigger(TriggerType.RETURN, null, 1, null, null, null, null, null, null);
+        return new GuiTrigger(TriggerType.RETURN, null, 1, null, null, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger select(String selectId, String selectValue, String guiId, Map<String, String> params) {
-        return new GuiTrigger(TriggerType.SELECT, null, 1, guiId, params, selectId, selectValue, null, null);
+        return new GuiTrigger(TriggerType.SELECT, null, 1, guiId, params, selectId, selectValue, null, null, null, null, null);
     }
 
     public static GuiTrigger anvilInput(String anvilTitle, String guiId, String paramKey) {
-        return new GuiTrigger(TriggerType.ANVIL_INPUT, null, 1, guiId, null, null, null, anvilTitle, paramKey);
+        return new GuiTrigger(TriggerType.ANVIL_INPUT, null, 1, guiId, null, null, null, anvilTitle, paramKey, null, null, null);
+    }
+
+    public static GuiTrigger toggle(String toggleId, String startState, Map<String, GuiToggleState> states) {
+        return new GuiTrigger(TriggerType.TOGGLE, null, 1, null, null, null, null, null, null, toggleId, startState, states);
     }
 
     public TriggerType type() {
@@ -93,5 +106,17 @@ public final class GuiTrigger {
 
     public String paramKey() {
         return paramKey;
+    }
+
+    public String toggleId() {
+        return toggleId;
+    }
+
+    public String toggleStartState() {
+        return toggleStartState;
+    }
+
+    public Map<String, GuiToggleState> toggleStates() {
+        return toggleStates;
     }
 }

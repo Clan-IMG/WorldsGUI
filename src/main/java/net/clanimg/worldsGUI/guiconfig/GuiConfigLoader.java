@@ -291,6 +291,55 @@ public final class GuiConfigLoader {
                 }
                 yield GuiTrigger.anvilInput(anvilTitle, targetGuiId, paramKey);
             }
+            case TOGGLE -> {
+                String toggleId = triggerSection.getString("toggle-id");
+                String startState = triggerSection.getString("start-state");
+                ConfigurationSection statesSection = triggerSection.getConfigurationSection("states");
+
+                if (toggleId == null || toggleId.isBlank() || startState == null || startState.isBlank() || statesSection == null) {
+                    errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': trigger 'toggle' benötigt 'toggle-id', 'start-state' und 'states'.");
+                    yield null;
+                }
+
+                Map<String, GuiToggleState> states = new LinkedHashMap<>();
+                for (String stateId : statesSection.getKeys(false)) {
+                    ConfigurationSection stateSection = statesSection.getConfigurationSection(stateId);
+                    if (stateSection == null) {
+                        errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': toggle state '" + stateId + "' ist ungültig.");
+                        continue;
+                    }
+
+                    String material = stateSection.getString("material");
+                    String title = stateSection.getString("title", "");
+                    String command = stateSection.getString("command");
+                    String next = stateSection.getString("next");
+
+                    if (material == null || material.isBlank() || command == null || command.isBlank() || next == null || next.isBlank()) {
+                        errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': toggle state '" + stateId + "' benötigt 'material', 'command' und 'next'.");
+                        continue;
+                    }
+
+                    states.put(stateId, new GuiToggleState(stateId, material, title, command, next));
+                }
+
+                if (!states.containsKey(startState)) {
+                    errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': toggle start-state '" + startState + "' existiert nicht in 'states'.");
+                    yield null;
+                }
+
+                for (GuiToggleState state : states.values()) {
+                    if (!states.containsKey(state.next())) {
+                        errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': toggle state '" + state.id() + "' verweist mit next='" + state.next() + "' auf einen unbekannten Zustand.");
+                    }
+                }
+
+                if (states.isEmpty()) {
+                    errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': trigger 'toggle' enthält keine gültigen states.");
+                    yield null;
+                }
+
+                yield GuiTrigger.toggle(toggleId, startState, states);
+            }
         };
     }
 

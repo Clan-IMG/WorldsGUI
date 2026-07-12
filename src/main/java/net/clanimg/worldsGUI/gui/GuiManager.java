@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -46,11 +47,14 @@ import net.clanimg.worldsGUI.guiconfig.GuiConfig;
 import net.clanimg.worldsGUI.guiconfig.GuiDefinition;
 import net.clanimg.worldsGUI.guiconfig.GuiSlotDefinition;
 import net.clanimg.worldsGUI.guiconfig.GuiSlotRangeDefinition;
+import net.clanimg.worldsGUI.guiconfig.GuiToggleState;
 import net.clanimg.worldsGUI.guiconfig.GuiTrigger;
+import net.clanimg.worldsGUI.guiconfig.TriggerType;
 import net.clanimg.worldsGUI.guiconfig.SlotMapper;
 import net.clanimg.worldsGUI.guiruntime.PlaceholderExpander;
 import net.clanimg.worldsGUI.guiruntime.PlayerGuiSession;
 import net.clanimg.worldsGUI.guiruntime.PlayerSessionManager;
+import net.clanimg.worldsGUI.guiruntime.ToggleRuntime;
 import net.clanimg.worldsGUI.guiruntime.TriggerDispatcher;
 import net.clanimg.worldsGUI.model.WorldEntry;
 import io.papermc.paper.dialog.Dialog;
@@ -246,8 +250,30 @@ public final class GuiManager {
                 continue;
             }
 
-            String title = PlaceholderExpander.expand(slotDefinition.title(), player, session, Map.of());
-            inventory.setItem(absolute, buildRuntimeItem(slotDefinition.material(), title == null ? "" : title, player, Map.of()));
+            String materialTemplate = slotDefinition.material();
+            String titleTemplate = slotDefinition.title();
+
+            GuiTrigger anyClickTrigger = slotDefinition.action() == null ? null : slotDefinition.action().anyClickTrigger();
+            if (anyClickTrigger != null && anyClickTrigger.type() == TriggerType.TOGGLE) {
+                GuiToggleState state = ToggleRuntime.currentState(anyClickTrigger, player, session, Map.of());
+                String currentStateId = ToggleRuntime.currentStateId(anyClickTrigger, player, session, Map.of());
+                String scopedId = ToggleRuntime.scopedToggleId(anyClickTrigger, player, session, Map.of());
+
+                if (!scopedId.isBlank()) {
+                    session.putSelection(scopedId, currentStateId);
+                }
+                if (anyClickTrigger.toggleId() != null && !anyClickTrigger.toggleId().isBlank()) {
+                    session.putSelection(anyClickTrigger.toggleId(), currentStateId);
+                }
+
+                if (state != null) {
+                    materialTemplate = state.material();
+                    titleTemplate = state.title();
+                }
+            }
+
+            String title = PlaceholderExpander.expand(titleTemplate, player, session, Map.of());
+            inventory.setItem(absolute, buildRuntimeItem(materialTemplate, title == null ? "" : title, player, Map.of()));
 
             if (slotDefinition.action() != null) {
                 holder.putClickHandler(absolute, slotDefinition.action(), Map.of());
@@ -3281,7 +3307,10 @@ public final class GuiManager {
             "SIMPLECLOUD_SERVER_NAME",
             "SIMPLECLOUD_SERVER_ID",
             "SIMPLECLOUD_SERVICE_NAME",
+            "SIMPLECLOUD_SERVICE_ID",
+            "CLOUDNET_SERVICE_ID",
             "CLOUDNET_SERVICE_NAME",
+            "SERVICE_NAME",
             "SERVER_NAME",
             "HOSTNAME"
         )) {
@@ -3291,11 +3320,25 @@ public final class GuiManager {
             }
         }
 
+        try {
+            String host = InetAddress.getLocalHost().getHostName();
+            if (host != null && !host.isBlank()) {
+                return host.trim();
+            }
+        } catch (Exception ignored) {
+            // Best-effort fallback only.
+        }
+
+        String bukkitName = Bukkit.getServer().getName();
+        if (bukkitName != null && !bukkitName.isBlank()) {
+            return bukkitName.trim() + "-" + Bukkit.getServer().getPort();
+        }
+
         if (!warnedMissingLocalServerId) {
             warnedMissingLocalServerId = true;
             plugin.getLogger().warning(
-                "Konnte keine lokale Server-ID aus ENV ermitteln. " +
-                "Setze SIMPLECLOUD_SERVER_ID oder SIMPLECLOUD_SERVICE_NAME."
+                "Konnte keine lokale Server-ID aus Config/ENV/Hostname ermitteln. " +
+                "Setze api.local-server-name oder SIMPLECLOUD_SERVICE_NAME/SIMPLECLOUD_SERVER_ID."
             );
         }
         return "";
