@@ -3498,10 +3498,19 @@ public final class GuiManager {
 
     private List<String> resolveSelectableServerNames() {
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
+        String localServer = resolveLocalServerId();
+
+        boolean localBlocked = !localServer.isBlank()
+            && blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, localServer));
 
         List<String> apiOnline = repository.listOnlineServerNames(20);
         if (!apiOnline.isEmpty()) {
-            List<String> allOnline = new ArrayList<>(new LinkedHashSet<>(apiOnline));
+            LinkedHashSet<String> merged = new LinkedHashSet<>(apiOnline);
+            if (!localServer.isBlank() && !localBlocked) {
+                merged.add(localServer);
+            }
+
+            List<String> allOnline = new ArrayList<>(merged);
             allOnline.sort(String.CASE_INSENSITIVE_ORDER);
 
             if (blockedServers.isEmpty()) {
@@ -3523,8 +3532,12 @@ public final class GuiManager {
         Optional<Set<String>> onlineIdentifiersOpt = fetchOnlineServerIdentifiers();
 
         if (onlineIdentifiersOpt.isPresent()) {
-            Set<String> onlineIdentifiers = onlineIdentifiersOpt.get();
-            List<String> allOnline = new ArrayList<>(onlineIdentifiers);
+            LinkedHashSet<String> merged = new LinkedHashSet<>(onlineIdentifiersOpt.get());
+            if (!localServer.isBlank() && !localBlocked) {
+                merged.add(localServer);
+            }
+
+            List<String> allOnline = new ArrayList<>(merged);
             allOnline.sort(String.CASE_INSENSITIVE_ORDER);
 
             if (!allOnline.isEmpty() && blockedServers.isEmpty()) {
@@ -3547,7 +3560,7 @@ public final class GuiManager {
     }
 
     private List<String> resolveFallbackServerNames(List<String> blockedServers) {
-        String local = resolveExplicitLocalServerId();
+        String local = resolveLocalServerId();
         if (local == null || local.isBlank()) {
             return List.of();
         }
