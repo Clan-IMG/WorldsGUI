@@ -398,7 +398,7 @@ guis:
         action:
           right-click:
             trigger: "command"
-            command: "nav customer remove %world% %target_player_name%"
+            command: "nav my-worlds remove %world% %target_player_name%"
             # kein left-click definiert: Linksklick auf bereits eingeladene Spieler tut bewusst nichts.
 
   # Zeigt bereits für %world% zum Bauen berechtigte Spieler als Köpfe an.
@@ -430,7 +430,7 @@ guis:
         action:
           right-click:
             trigger: "command"
-            command: "nav my-world untrust %world% %target_player_name%"
+            command: "nav my-worlds untrust %world% %target_player_name%"
 
   # Zeigt ALLE auf dem Server registrierten Spieler (laut LuckPerms),
   # gefiltert nach dem in invited-friends eingegebenen Suchbegriff.
@@ -500,12 +500,12 @@ guis:
             visit:
               material: "OBSERVER"
               title: "Visit Rechte"
-              command: "nav customer invite %world% %target_player_name%"
+              command: "nav my-worlds invite %world% %target_player_name%"
               next: "build"                   # welcher State nach diesem Klick folgt
             build:
               material: "WOODEN_AXE"
               title: "Build Rechte"
-              command: "nav my-world trust %world% %target_player_name%"
+              command: "nav my-worlds trust %world% %target_player_name%"
               next: "visit"                    # zurück zum ersten State (Kreislauf)
       slot-5:
         material: "%player_head%"
@@ -523,4 +523,4 @@ guis:
           trigger: "open-gui"
           gui-id: "confirm"
           params:
-            confirm-command: "nav my-world remove %world% %target_player_name%"
+            confirm-command: "nav my-worlds remove %world% %target_player_name%"

@@ -114,6 +114,7 @@ public final class GuiManager {
         "invited-friends",
         "trusted-friends",
         "select-friend",
+        "edit-friend",
         "tickets",
         "archived-tickets"
     );
@@ -159,6 +160,7 @@ public final class GuiManager {
     private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
     private volatile boolean warnedMissingLocalServerId;
+    private volatile boolean warnedMissingExplicitServerIdForAutoCreate;
     private volatile GuiConfig guiConfig;
     private final PlayerSessionManager playerSessions = new PlayerSessionManager();
     private final TriggerDispatcher triggerDispatcher;
@@ -1288,6 +1290,20 @@ public final class GuiManager {
         player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
+    public void executeNavMyWorldInvite(Player player, String worldName, String targetPlayer) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_INVITE, true)) {
+            return;
+        }
+        invitePlayerToWorld(player, worldName, targetPlayer);
+    }
+
+    public void executeNavMyWorldRemove(Player player, String worldName, String targetPlayer) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_REMOVE, true)) {
+            return;
+        }
+        removePlayerFromWorld(player, worldName, targetPlayer);
+    }
+
     public void executeNavMyWorldRename(Player player, String worldName, String[] args) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_RENAME, true)) {
             return;
@@ -1676,11 +1692,19 @@ public final class GuiManager {
     }
 
     public void ensurePersonalFlatWorldForJoin(Player player) {
-        String localServer = resolveLocalServerId();
+        String localServer = resolveExplicitLocalServerId();
 
         List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
         boolean hasEligibleWorld;
         if (localServer.isBlank()) {
+            if (!warnedMissingExplicitServerIdForAutoCreate) {
+                warnedMissingExplicitServerIdForAutoCreate = true;
+                plugin.getLogger().warning(
+                    "Auto-Welt-Erstellung beim Join nutzt keine Hostname-Fallback-ID. " +
+                    "Setze api.local-server-name oder SIMPLECLOUD_SERVICE_NAME/SIMPLECLOUD_SERVER_ID " +
+                    "für servergenaue Erkennung."
+                );
+            }
             hasEligibleWorld = !ownWorlds.isEmpty();
         } else {
             hasEligibleWorld = ownWorlds.stream()
@@ -1779,6 +1803,11 @@ public final class GuiManager {
             return;
         }
 
+        invitePlayerToWorld(player, worldName, targetPlayer);
+    }
+
+    private void invitePlayerToWorld(Player player, String worldName, String targetPlayer) {
+
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
             player.sendMessage("§cUngültiger Spielername.");
@@ -1816,6 +1845,11 @@ public final class GuiManager {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_REMOVE, true)) {
             return;
         }
+
+        removePlayerFromWorld(player, worldName, targetPlayer);
+    }
+
+    private void removePlayerFromWorld(Player player, String worldName, String targetPlayer) {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
@@ -3298,26 +3332,9 @@ public final class GuiManager {
     }
 
     private String resolveLocalServerId() {
-        String configuredLocalServer = plugin.getConfig().getString("api.local-server-name", "");
-        if (configuredLocalServer != null && !configuredLocalServer.isBlank()) {
-            return configuredLocalServer.trim();
-        }
-
-        for (String envKey : List.of(
-            "SIMPLECLOUD_SERVER_NAME",
-            "SIMPLECLOUD_SERVER_ID",
-            "SIMPLECLOUD_SERVICE_NAME",
-            "SIMPLECLOUD_SERVICE_ID",
-            "CLOUDNET_SERVICE_ID",
-            "CLOUDNET_SERVICE_NAME",
-            "SERVICE_NAME",
-            "SERVER_NAME",
-            "HOSTNAME"
-        )) {
-            String value = System.getenv(envKey);
-            if (value != null && !value.isBlank()) {
-                return value.trim();
-            }
+        String explicitServer = resolveExplicitLocalServerId();
+        if (!explicitServer.isBlank()) {
+            return explicitServer;
         }
 
         try {
@@ -3340,6 +3357,31 @@ public final class GuiManager {
                 "Konnte keine lokale Server-ID aus Config/ENV/Hostname ermitteln. " +
                 "Setze api.local-server-name oder SIMPLECLOUD_SERVICE_NAME/SIMPLECLOUD_SERVER_ID."
             );
+        }
+        return "";
+    }
+
+    private String resolveExplicitLocalServerId() {
+        String configuredLocalServer = plugin.getConfig().getString("api.local-server-name", "");
+        if (configuredLocalServer != null && !configuredLocalServer.isBlank()) {
+            return configuredLocalServer.trim();
+        }
+
+        for (String envKey : List.of(
+            "SIMPLECLOUD_SERVER_NAME",
+            "SIMPLECLOUD_SERVER_ID",
+            "SIMPLECLOUD_SERVICE_NAME",
+            "SIMPLECLOUD_SERVICE_ID",
+            "CLOUDNET_SERVICE_ID",
+            "CLOUDNET_SERVICE_NAME",
+            "SERVICE_NAME",
+            "SERVER_NAME",
+            "HOSTNAME"
+        )) {
+            String value = System.getenv(envKey);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
         }
         return "";
     }

@@ -73,7 +73,7 @@ public final class NavCommand implements TabExecutor {
             }
             case "my-world", "my-worlds" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav my-world <create|clone|import|delete|open|closed|trust|untrust|rename|icon> ...");
+                    player.sendMessage("Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...");
                     return true;
                 }
                 String myWorldSub = args[1].toLowerCase(Locale.ROOT);
@@ -112,7 +112,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "trust" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world trust <world-name> <player>");
+                            player.sendMessage("Usage: /nav my-worlds trust <world-name> <player>");
                             return true;
                         }
                         guiManager.executeNavMyWorldTrust(player, args[2], args[3]);
@@ -120,10 +120,26 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "untrust" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world untrust <world-name> <player>");
+                            player.sendMessage("Usage: /nav my-worlds untrust <world-name> <player>");
                             return true;
                         }
                         guiManager.executeNavMyWorldUntrust(player, args[2], args[3]);
+                        return true;
+                    }
+                    case "invite" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-worlds invite <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldInvite(player, args[2], args[3]);
+                        return true;
+                    }
+                    case "remove" -> {
+                        if (args.length < 4) {
+                            player.sendMessage("Usage: /nav my-worlds remove <world-name> <player>");
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldRemove(player, args[2], args[3]);
                         return true;
                     }
                     case "rename" -> {
@@ -160,7 +176,7 @@ public final class NavCommand implements TabExecutor {
                         return true;
                     }
                     default -> {
-                        player.sendMessage("Usage: /nav my-world <create|clone|import|delete|open|closed|trust|untrust|rename|icon> ...");
+                        player.sendMessage("Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...");
                         return true;
                     }
                 }
@@ -270,7 +286,7 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 2 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))) {
-            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "trust", "untrust", "rename", "icon"), args[1]);
+            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "invite", "remove", "trust", "untrust", "rename", "icon"), args[1]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("customer")) {
@@ -315,6 +331,18 @@ public final class NavCommand implements TabExecutor {
 
         if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("import")) {
             return filterPrefix(guiManager.listImportableWorldNames((Player) sender), args[2]);
+        }
+
+        if (args.length == 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))
+            && (args[1].equalsIgnoreCase("invite") || args[1].equalsIgnoreCase("remove")
+                || args[1].equalsIgnoreCase("trust") || args[1].equalsIgnoreCase("untrust"))) {
+            return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[2]);
+        }
+
+        if (args.length == 4 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))
+            && (args[1].equalsIgnoreCase("invite") || args[1].equalsIgnoreCase("remove")
+                || args[1].equalsIgnoreCase("trust") || args[1].equalsIgnoreCase("untrust"))) {
+            return filterPrefix(guiManager.listCloneTargetPlayerNames((Player) sender), args[3]);
         }
 
         if (args.length == 4 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("import")) {

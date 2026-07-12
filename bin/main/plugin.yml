@@ -59,6 +59,9 @@ permissions:
   worldsgui.command.nav.delete:
     description: Erlaubt /nav delete (archiviert die Welt)
     default: op
+  worldsgui.command.nav.confirm:
+    description: Erlaubt /nav confirm <code>
+    default: op
   worldsgui.command.nav.join:
     description: Erlaubt /nav join (enable/disable)
     default: op
@@ -83,11 +86,17 @@ permissions:
   worldsgui.command.nav.my-world.closed:
     description: Erlaubt /nav my-world closed
     default: op
+  worldsgui.command.nav.my-world.invite:
+    description: Erlaubt /nav my-worlds invite <world-name> <player>
+    default: op
+  worldsgui.command.nav.my-world.remove:
+    description: Erlaubt /nav my-worlds remove <world-name> <player>
+    default: op
   worldsgui.command.nav.my-world.trust:
-    description: Erlaubt /nav my-world trust (nur TEAM_ROLE-Mitglieder, müssen verifiziert sein)
+    description: Erlaubt /nav my-worlds trust (nur für eingeladene Spieler)
     default: op
   worldsgui.command.nav.my-world.untrust:
-    description: Erlaubt /nav my-world untrust
+    description: Erlaubt /nav my-worlds untrust
     default: op
   worldsgui.command.nav.my-world.rename:
     description: Erlaubt /nav my-world rename
@@ -112,6 +121,18 @@ permissions:
     default: op
   worldsgui.command.nav.icon:
     description: Erlaubt /nav icon
+    default: op
+  worldsgui.command.nav.invite:
+    description: Erlaubt /nav customer invite <world> <player>
+    default: op
+  worldsgui.command.nav.remove:
+    description: Erlaubt /nav customer remove <world> <player>
+    default: op
+  worldsgui.command.nav.trust:
+    description: Erlaubt /nav customer trust <player>
+    default: op
+  worldsgui.command.nav.untrust:
+    description: Erlaubt /nav customer untrust <player>
     default: op
   worldsgui.command.setspawn:
     description: Erlaubt /setspawn
