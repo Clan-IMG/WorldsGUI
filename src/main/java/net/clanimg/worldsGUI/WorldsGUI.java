@@ -3,7 +3,6 @@ package net.clanimg.worldsGUI;
 import net.clanimg.worldsGUI.command.IconCommand;
 import net.clanimg.worldsGUI.command.NavCommand;
 import net.clanimg.worldsGUI.command.RenameCommand;
-import net.clanimg.worldsGUI.command.SetSpawnCommand;
 import net.clanimg.worldsGUI.command.UnverifyCommand;
 import net.clanimg.worldsGUI.command.VerifyCommand;
 import net.clanimg.worldsGUI.data.WorldsRepository;
@@ -107,9 +106,6 @@ public final class WorldsGUI extends JavaPlugin {
             NavCommand navCommand = new NavCommand(guiManager);
             getCommand("nav").setExecutor(navCommand);
             getCommand("nav").setTabCompleter(navCommand);
-        }
-        if (getCommand("setspawn") != null) {
-            getCommand("setspawn").setExecutor(new SetSpawnCommand(guiManager));
         }
         if (getCommand("rename") != null) {
             getCommand("rename").setExecutor(new RenameCommand(guiManager));
