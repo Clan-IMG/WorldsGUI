@@ -255,7 +255,8 @@ public final class GuiConfigLoader {
                     yield null;
                 }
                 int clicks = triggerSection.getInt("clicks", 1);
-                yield GuiTrigger.command(command, clicks);
+                boolean chatFeedback = triggerSection.getBoolean("chat-feedback", true);
+                yield GuiTrigger.command(command, clicks, chatFeedback);
             }
             case OPEN_GUI -> {
                 String targetGuiId = triggerSection.getString("gui-id");
@@ -312,6 +313,7 @@ public final class GuiConfigLoader {
                     String material = stateSection.getString("material");
                     String title = stateSection.getString("title", "");
                     String command = stateSection.getString("command");
+                    boolean chatFeedback = stateSection.getBoolean("chat-feedback", true);
                     String next = stateSection.getString("next");
 
                     if (material == null || material.isBlank() || command == null || command.isBlank() || next == null || next.isBlank()) {
@@ -319,7 +321,7 @@ public final class GuiConfigLoader {
                         continue;
                     }
 
-                    states.put(stateId, new GuiToggleState(stateId, material, title, command, next));
+                    states.put(stateId, new GuiToggleState(stateId, material, title, command, chatFeedback, next));
                 }
 
                 if (!states.containsKey(startState)) {

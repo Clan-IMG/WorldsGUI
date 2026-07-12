@@ -57,7 +57,7 @@ public final class TriggerDispatcher {
         }
 
         player.closeInventory();
-        commandDispatcher.dispatch(player, expanded);
+        commandDispatcher.dispatch(player, expanded, trigger.chatFeedback());
     }
 
     private void executeOpenGui(Player player, PlayerGuiSession session, GuiTrigger trigger, Map<String, String> extra) {
@@ -123,7 +123,7 @@ public final class TriggerDispatcher {
             return;
         }
 
-        commandDispatcher.dispatch(player, expanded);
+        commandDispatcher.dispatch(player, expanded, state.chatFeedback());
 
         String next = state.next();
         if (next == null || next.isBlank() || !trigger.toggleStates().containsKey(next)) {

@@ -396,10 +396,10 @@ guis:
         material: "%player_head%"
         title: "%target_player_name%"
         action:
-          right-click:
-            trigger: "command"
-            command: "nav my-worlds remove %world% %target_player_name%"
-            # kein left-click definiert: Linksklick auf bereits eingeladene Spieler tut bewusst nichts.
+          trigger: "open-gui"
+          gui-id: "edit-friend"
+          params:
+            target_player_name: "%target_player_name%"
 
   # Zeigt bereits für %world% zum Bauen berechtigte Spieler als Köpfe an.
   # Rechtsklick entfernt die Bau-Berechtigung sofort.
@@ -454,16 +454,9 @@ guis:
         material: "%player_head%"
         title: "%target_player_name%"
         action:
-          left-click:
-            trigger: "open-gui"
-            gui-id: "edit-friend"
-            params:
-              target_player_name: "%target_player_name%"
-          right-click:
-            trigger: "open-gui"
-            gui-id: "edit-friend"
-            params:
-              target_player_name: "%target_player_name%"
+          trigger: "command"
+          command: "nav my-worlds invite %world% %target_player_name%"
+          chat-feedback: false
   
 
   # 1 2 3 4 5 6 7 8 9
@@ -498,14 +491,16 @@ guis:
           start-state: "visit"               # mit welchem State begonnen wird, wenn noch nichts gesetzt ist
           states:
             visit:
-              material: "OBSERVER"
-              title: "Visit Rechte"
+              material: "WOODEN_DOOR"
+              title: "Build Rechte"
               command: "nav my-worlds invite %world% %target_player_name%"
+              chat-feedback: false # keine Chat-Nachricht, wenn der Spieler hier was klickt
               next: "build"                   # welcher State nach diesem Klick folgt
             build:
-              material: "WOODEN_AXE"
-              title: "Build Rechte"
+              material: "OBSERVER"
+              title: "Visit Rechte"
               command: "nav my-worlds trust %world% %target_player_name%"
+              chat-feedback: false
               next: "visit"                    # zurück zum ersten State (Kreislauf)
       slot-5:
         material: "%player_head%"

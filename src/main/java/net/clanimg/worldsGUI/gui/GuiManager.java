@@ -159,6 +159,7 @@ public final class GuiManager {
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
+    private final Set<UUID> suppressedChatFeedbackPlayers = ConcurrentHashMap.newKeySet();
     private volatile boolean warnedMissingLocalServerId;
     private volatile boolean warnedMissingExplicitServerIdForAutoCreate;
     private volatile GuiConfig guiConfig;
@@ -172,7 +173,19 @@ public final class GuiManager {
         this.configuredGameRuleCommands = loadConfiguredGameRuleCommands();
         this.triggerDispatcher = new TriggerDispatcher(
             this::openGui,
-            (player, command) -> Bukkit.dispatchCommand(player, command),
+            (player, command, chatFeedback) -> {
+                UUID playerId = player.getUniqueId();
+                if (!chatFeedback) {
+                    suppressedChatFeedbackPlayers.add(playerId);
+                }
+                try {
+                    Bukkit.dispatchCommand(player, command);
+                } finally {
+                    if (!chatFeedback) {
+                        suppressedChatFeedbackPlayers.remove(playerId);
+                    }
+                }
+            },
             this::requestAnvilInput
         );
     }
@@ -534,6 +547,7 @@ public final class GuiManager {
                 selectedWorldByPlayer.put(player.getUniqueId(), worldName);
                 PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
                 session.setCurrentWorld(worldName);
+                session.pushCurrentToHistory();
                 openGui(player, "edit-world");
             }
         }
@@ -1219,7 +1233,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1236,22 +1250,23 @@ public final class GuiManager {
         }
 
         if (!containsIgnoreCase(entry.invitedPlayers(), normalizedTarget)) {
-            player.sendMessage("§cSpieler ist nicht eingeladen und kann nicht getrusted werden.");
+            sendPlain(player, "§cSpieler ist nicht eingeladen und kann nicht getrusted werden.");
             return;
         }
 
         List<String> trusted = new ArrayList<>(entry.trustedPlayers());
         if (containsIgnoreCase(trusted, normalizedTarget)) {
-            player.sendMessage("§eSpieler ist bereits getrusted.");
+            sendPlain(player, "§eSpieler ist bereits getrusted.");
             return;
         }
 
         trusted.add(normalizedTarget);
         if (!repository.setTrustedPlayers(worldName, trusted)) {
-            player.sendMessage("§cTrust konnte nicht gespeichert werden (API-Fehler).");
+            sendPlain(player, "§cTrust konnte nicht gespeichert werden (API-Fehler).");
             return;
         }
-        player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
+        refreshWorldGuardProtection(worldName);
+        sendPlain(player, "§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
     }
 
     public void executeNavMyWorldUntrust(Player player, String worldName, String targetPlayer) {
@@ -1261,7 +1276,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1279,15 +1294,16 @@ public final class GuiManager {
 
         List<String> trusted = new ArrayList<>(entry.trustedPlayers());
         if (!removeIgnoreCase(trusted, normalizedTarget)) {
-            player.sendMessage("§eSpieler hat aktuell keinen Trust-Status.");
+            sendPlain(player, "§eSpieler hat aktuell keinen Trust-Status.");
             return;
         }
 
         if (!repository.setTrustedPlayers(worldName, trusted)) {
-            player.sendMessage("§cUntrust konnte nicht gespeichert werden (API-Fehler).");
+            sendPlain(player, "§cUntrust konnte nicht gespeichert werden (API-Fehler).");
             return;
         }
-        player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
+        refreshWorldGuardProtection(worldName);
+        sendPlain(player, "§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
     public void executeNavMyWorldInvite(Player player, String worldName, String targetPlayer) {
@@ -1810,7 +1826,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1828,17 +1844,26 @@ public final class GuiManager {
 
         List<String> invited = new ArrayList<>(entry.invitedPlayers());
         if (containsIgnoreCase(invited, normalizedTarget)) {
-            player.sendMessage("§eSpieler ist bereits eingeladen.");
+            sendPlain(player, "§eSpieler ist bereits eingeladen.");
             return;
         }
 
         invited.add(normalizedTarget);
         if (!repository.setInvitedPlayers(worldName, invited)) {
-            player.sendMessage("§cEinladung konnte nicht gespeichert werden (API-Fehler).");
+            sendPlain(player, "§cEinladung konnte nicht gespeichert werden (API-Fehler).");
             return;
         }
         refreshWorldGuardProtection(worldName);
-        player.sendMessage("§aSpieler §f" + normalizedTarget + " §awurde für §f" + worldName + " §aeingeladen.");
+        sendPlain(player, "§aSpieler §f" + normalizedTarget + " §awurde für §f" + worldName + " §aeingeladen.");
+
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
+            String previousGuiId = session.popHistory();
+            if (previousGuiId != null && !previousGuiId.isBlank()) {
+                session.setCurrentGuiId(previousGuiId);
+                openGui(player, previousGuiId);
+            }
+        }
     }
 
     public void executeNavCustomerRemove(Player player, String worldName, String targetPlayer) {
@@ -1853,7 +1878,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1871,7 +1896,7 @@ public final class GuiManager {
 
         List<String> invited = new ArrayList<>(entry.invitedPlayers());
         if (!removeIgnoreCase(invited, normalizedTarget)) {
-            player.sendMessage("§eSpieler ist für diese Welt nicht eingeladen.");
+            sendPlain(player, "§eSpieler ist für diese Welt nicht eingeladen.");
             return;
         }
 
@@ -1879,15 +1904,16 @@ public final class GuiManager {
         removeIgnoreCase(trusted, normalizedTarget);
 
         if (!repository.setInvitedPlayers(worldName, invited)) {
-            player.sendMessage("§cEinladung konnte nicht entfernt werden (API-Fehler).");
+            sendPlain(player, "§cEinladung konnte nicht entfernt werden (API-Fehler).");
             return;
         }
         if (!repository.setTrustedPlayers(worldName, trusted)) {
-            player.sendMessage("§cTrust-Status konnte nicht aktualisiert werden (API-Fehler).");
+            sendPlain(player, "§cTrust-Status konnte nicht aktualisiert werden (API-Fehler).");
             return;
         }
         refreshWorldGuardProtection(worldName);
-        player.sendMessage("§aEinladung für §f" + normalizedTarget + " §awurde entfernt.");
+        sendPlain(player, "§aEinladung für §f" + normalizedTarget + " §awurde entfernt.");
+        forcePlayerOutOfWorldIfNeeded(normalizedTarget, worldName);
     }
 
     public void executeNavCustomerTrust(Player player, String targetPlayer) {
@@ -3125,10 +3151,7 @@ public final class GuiManager {
         }
 
         for (String trustedPlayer : trustedPlayers == null ? List.<String>of() : trustedPlayers) {
-            if (trustedPlayer == null || trustedPlayer.isBlank()) {
-                continue;
-            }
-            region.getMembers().addPlayer(trustedPlayer.trim());
+            addWorldGuardMember(region, trustedPlayer);
         }
 
         region.setFlag(Flags.BUILD, StateFlag.State.DENY);
@@ -3153,6 +3176,32 @@ public final class GuiManager {
         return Bukkit.getPluginManager().getPlugin("WorldGuard") != null;
     }
 
+    private void addWorldGuardMember(ProtectedRegion region, String playerName) {
+        if (region == null || playerName == null || playerName.isBlank()) {
+            return;
+        }
+
+        String normalized = playerName.trim();
+        Player online = Bukkit.getPlayerExact(normalized);
+        if (online != null) {
+            region.getMembers().addPlayer(online.getUniqueId());
+            region.getMembers().addPlayer(online.getName());
+            return;
+        }
+
+        OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(normalized);
+        if (cached != null && cached.getUniqueId() != null) {
+            region.getMembers().addPlayer(cached.getUniqueId());
+            String cachedName = cached.getName();
+            if (cachedName != null && !cachedName.isBlank()) {
+                region.getMembers().addPlayer(cachedName);
+            }
+            return;
+        }
+
+        region.getMembers().addPlayer(normalized);
+    }
+
     private void evacuatePlayersFromWorld(String worldName) {
         World target = Bukkit.getWorld(worldName);
         if (target == null) {
@@ -3171,6 +3220,33 @@ public final class GuiManager {
             affected.teleport(destination);
             affected.sendMessage("§eDiese Welt wurde gelöscht. Du wurdest in deine Welt §f" + ownFallback.getName() + " §eteleportiert.");
         }
+    }
+
+    private void forcePlayerOutOfWorldIfNeeded(String playerName, String worldName) {
+        if (playerName == null || playerName.isBlank() || worldName == null || worldName.isBlank()) {
+            return;
+        }
+
+        Player target = Bukkit.getPlayerExact(playerName);
+        if (target == null || !target.isOnline()) {
+            return;
+        }
+
+        World currentWorld = target.getWorld();
+        if (currentWorld == null || !currentWorld.getName().equalsIgnoreCase(worldName)) {
+            return;
+        }
+
+        World fallback = resolveOwnFallbackWorld(target, worldName);
+        if (fallback == null && !Bukkit.getWorlds().isEmpty()) {
+            fallback = Bukkit.getWorlds().get(0);
+        }
+        if (fallback == null) {
+            return;
+        }
+
+        target.teleport(fallback.getSpawnLocation());
+        target.sendMessage("§eDu wurdest aus der Welt §f" + worldName + " §eentfernt und in §f" + fallback.getName() + " §eteleportiert.");
     }
 
     private void setWorldPublic(Player player, String worldName, boolean isPublic, String permission) {
@@ -3818,6 +3894,9 @@ public final class GuiManager {
     }
 
     private void send(Player player, String key, String... replacements) {
+        if (isChatFeedbackSuppressed(player)) {
+            return;
+        }
         String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
         for (String line : readMessageLines("messages." + key, key, replacements)) {
             String full = prefixTemplate.replace("%messages%", line);
@@ -3826,11 +3905,25 @@ public final class GuiManager {
     }
 
     private void sendNoPrefix(Player player, String key, String... replacements) {
+        if (isChatFeedbackSuppressed(player)) {
+            return;
+        }
         String noPrefixPath = "messages.no-prefix." + key;
         String fallbackPath = "messages." + key;
         for (String line : readMessageLines(noPrefixPath, fallbackPath, key, replacements)) {
             player.sendMessage(parseFormattedMessage(line));
         }
+    }
+
+    private boolean isChatFeedbackSuppressed(Player player) {
+        return player != null && suppressedChatFeedbackPlayers.contains(player.getUniqueId());
+    }
+
+    private void sendPlain(Player player, String message) {
+        if (isChatFeedbackSuppressed(player)) {
+            return;
+        }
+        player.sendMessage(message);
     }
 
     private List<String> readMessageLines(String path, String fallbackKey, String... replacements) {
