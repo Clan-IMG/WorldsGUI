@@ -504,7 +504,7 @@ guis:
               chat-feedback: false
               next: "visit"                    # zurück zum ersten State (Kreislauf)
       slot-5:
-        material: "%player_head%"
+        material: "%target_player_head%" # vorher war das nur %player_head% kannst du es ändern, das es der kopf vom spieler ist den man angeklcikt hat
         title: "%target_player_name%"
         lore:
           - "Spieler hat folgende Rechte:"

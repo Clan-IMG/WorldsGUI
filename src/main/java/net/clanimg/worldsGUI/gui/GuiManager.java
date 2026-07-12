@@ -289,7 +289,7 @@ public final class GuiManager {
             }
 
             String title = PlaceholderExpander.expand(titleTemplate, player, session, Map.of());
-            inventory.setItem(absolute, buildRuntimeItem(materialTemplate, title == null ? "" : title, player, Map.of()));
+            inventory.setItem(absolute, buildRuntimeItem(materialTemplate, title == null ? "" : title, player, session, Map.of()));
 
             if (slotDefinition.action() != null) {
                 holder.putClickHandler(absolute, slotDefinition.action(), Map.of());
@@ -309,7 +309,7 @@ public final class GuiManager {
             int absolute = range.from() + i;
             Map<String, String> extra = items.get(i);
             String title = PlaceholderExpander.expand(range.title(), player, session, extra);
-            inventory.setItem(absolute, buildRuntimeItem(range.material(), title == null ? "" : title, player, extra));
+            inventory.setItem(absolute, buildRuntimeItem(range.material(), title == null ? "" : title, player, session, extra));
 
             if (range.action() != null) {
                 holder.putClickHandler(absolute, range.action(), extra);
@@ -463,17 +463,20 @@ public final class GuiManager {
         return material;
     }
 
-    private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, Map<String, String> extra) {
+    private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
         String token = materialTemplate == null ? "" : materialTemplate.trim();
         if ("%player_head%".equalsIgnoreCase(token)) {
-            return buildPlayerHeadItem(title, player, extra);
+            return buildPlayerHeadItem(title, player, session, extra);
+        }
+        if ("%target_player_head%".equalsIgnoreCase(token)) {
+            return buildPlayerHeadItem(title, player, session, extra);
         }
 
         Material material = resolveMaterial(materialTemplate);
         return namedItem(material, title);
     }
 
-    private ItemStack buildPlayerHeadItem(String title, Player player, Map<String, String> extra) {
+    private ItemStack buildPlayerHeadItem(String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
         ItemStack item = new ItemStack(Material.PLAYER_HEAD);
         ItemMeta meta = item.getItemMeta();
         if (!(meta instanceof SkullMeta skullMeta)) {
@@ -486,6 +489,9 @@ public final class GuiManager {
                 extra.get("target_player_name"),
                 extra.get("player_name")
             );
+        }
+        if (targetName == null || targetName.isBlank()) {
+            targetName = PlaceholderExpander.expand("%target_player_name%", player, session, extra);
         }
         if (targetName == null || targetName.isBlank()) {
             targetName = player == null ? null : player.getName();
