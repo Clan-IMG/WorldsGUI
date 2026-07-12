@@ -1102,6 +1102,11 @@ public final class GuiManager {
         }
 
         Set<String> targetGroups = new LinkedHashSet<>();
+        if (defaultGroup != null && !defaultGroup.isBlank()) {
+            // Die Default-Gruppe bleibt immer am User und wird bei jedem Sync ggf. erneut gesetzt.
+            targetGroups.add(defaultGroup.trim());
+        }
+
         if (verified) {
             if (verifiedGroup != null && !verifiedGroup.isBlank()) {
                 targetGroups.add(verifiedGroup.trim());
@@ -1112,10 +1117,6 @@ public final class GuiManager {
             boolean shouldHaveKunde = roleKey.equals("kunde") || hasOpenTicket;
             if (shouldHaveKunde && kundeGroup != null && !kundeGroup.isBlank()) {
                 targetGroups.add(kundeGroup.trim());
-            }
-        } else {
-            if (defaultGroup != null && !defaultGroup.isBlank()) {
-                targetGroups.add(defaultGroup.trim());
             }
         }
 
