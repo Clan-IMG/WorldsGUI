@@ -16,7 +16,7 @@ public final class UnverifyCommand implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("Dieser Befehl ist nur für Spieler.");
+            guiManager.sendWithPrefix(sender, "command.only-player", "Dieser Befehl ist nur für Spieler.");
             return true;
         }
         guiManager.executeUnverify(player);

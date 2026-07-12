@@ -56,7 +56,9 @@ public final class TriggerDispatcher {
             return;
         }
 
-        player.closeInventory();
+        if (trigger.chatFeedback()) {
+            player.closeInventory();
+        }
         commandDispatcher.dispatch(player, expanded, trigger.chatFeedback());
     }
 

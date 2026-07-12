@@ -488,18 +488,18 @@ guis:
         action:
           trigger: "toggle"
           toggle-id: "world-permission"     # Schlüssel, unter dem der aktuelle Zustand pro Spieler+Welt gespeichert wird
-          start-state: "visit"               # mit welchem State begonnen wird, wenn noch nichts gesetzt ist
+          start-state: "build"               # mit welchem State begonnen wird, wenn noch nichts gesetzt ist
           states:
             visit:
               material: "WOODEN_AXE"
               title: "Build Rechte"
-              command: "nav my-worlds trust %world% %target_player_name%"
+              command: "nav my-worlds untrust %world% %target_player_name%"
               chat-feedback: false # keine Chat-Nachricht, wenn der Spieler hier was klickt
               next: "build"                   # welcher State nach diesem Klick folgt
             build:
               material: "OBSERVER"
               title: "Visit Rechte"
-              command: "nav my-worlds untrust %world% %target_player_name%"
+              command: "nav my-worlds trust %world% %target_player_name%"
               chat-feedback: false
               next: "visit"                    # zurück zum ersten State (Kreislauf)
       slot-5:

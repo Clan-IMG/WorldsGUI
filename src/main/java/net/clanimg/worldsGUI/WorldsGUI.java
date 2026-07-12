@@ -135,7 +135,7 @@ public final class WorldsGUI extends JavaPlugin {
                     }
                     return true;
                 }
-                sender.sendMessage("Dieser Befehl ist nur für die Konsole.");
+                guiManager.sendWithPrefix(sender, "command.only-console", "Dieser Befehl ist nur für die Konsole.");
                 return true;
             });
         }
@@ -148,7 +148,7 @@ public final class WorldsGUI extends JavaPlugin {
                     }
                     return true;
                 }
-                sender.sendMessage("Dieser Befehl ist nur für die Konsole.");
+                guiManager.sendWithPrefix(sender, "command.only-console", "Dieser Befehl ist nur für die Konsole.");
                 return true;
             });
         }

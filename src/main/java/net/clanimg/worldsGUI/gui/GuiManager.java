@@ -157,7 +157,7 @@ public final class GuiManager {
     private final Map<UUID, String> selectedWorldByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, PendingInput> pendingInputs = new ConcurrentHashMap<>();
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
-    private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
+    private final Map<UUID, String> lastAppliedLuckPermsState = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
     private final Set<UUID> suppressedChatFeedbackPlayers = ConcurrentHashMap.newKeySet();
     private volatile boolean warnedMissingLocalServerId;
@@ -194,7 +194,7 @@ public final class GuiManager {
         selectedWorldByPlayer.clear();
         pendingInputs.clear();
         pendingDeleteByPlayer.clear();
-        lastAppliedLuckPermsGroup.clear();
+        lastAppliedLuckPermsState.clear();
         playerSessions.clear();
         pendingAnvilInputs.clear();
     }
@@ -390,15 +390,20 @@ public final class GuiManager {
                     players.add(offline.getName());
                 }
             }
-            return toPlayerSlotItems(players, filter);
+            return toPlayerSlotItems(players, filter, player.getName());
         }
         return List.of();
     }
 
     private List<Map<String, String>> toPlayerSlotItems(List<String> players, String filter) {
+        return toPlayerSlotItems(players, filter, null);
+    }
+
+    private List<Map<String, String>> toPlayerSlotItems(List<String> players, String filter, String excludePlayerName) {
         List<Map<String, String>> items = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         String normalizedFilter = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
+        String excluded = excludePlayerName == null ? "" : excludePlayerName.trim().toLowerCase(Locale.ROOT);
 
         for (String playerName : players) {
             if (playerName == null) {
@@ -407,6 +412,10 @@ public final class GuiManager {
 
             String normalized = playerName.trim();
             if (normalized.isBlank()) {
+                continue;
+            }
+
+            if (!excluded.isBlank() && normalized.equalsIgnoreCase(excludePlayerName)) {
                 continue;
             }
 
@@ -754,25 +763,26 @@ public final class GuiManager {
 
         String code = codeRaw == null ? "" : codeRaw.trim();
         if (!code.matches("\\d{4}")) {
-            player.sendMessage("§cUsage: /verify <4-digit-code>");
+            send(player, "usage.verify");
             return;
         }
 
         String baseUrl = resolveProfileApiBaseUrl();
         String apiToken = resolveProfileApiToken();
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
-            player.sendMessage("§cVerify ist nicht konfiguriert (api.base-url/api.profile-token bzw. api.token in config.yml).");
+            send(player, "verify.not-configured");
             return;
         }
 
         String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         String payload = "{\"mcName\":\"" + player.getName() + "\",\"code\":\"" + code + "\",\"playerName\":\"" + player.getName() + "\"}";
 
-        player.sendMessage("§7Prüfe Verify-Code ...");
+        send(player, "verify.progress");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
             String resolvedRole = null;
+            boolean hasOpenTicket = false;
             try {
                 HttpResponse<String> response = postWithFallback(
                     normalizedBase,
@@ -795,6 +805,7 @@ public final class GuiManager {
 
                 if (verified) {
                     resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                    hasOpenTicket = hasAssignedOpenTicket(player.getName());
                     message = "§aMinecraft-Profil erfolgreich verifiziert. §7Rolle: §f" + displayRoleLabel(resolvedRole);
                 } else {
                     String error = extractJsonString(body, "error");
@@ -812,10 +823,11 @@ public final class GuiManager {
 
             String finalMessage = message;
             String finalRole = resolvedRole;
+            boolean finalHasOpenTicket = hasOpenTicket;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 player.sendMessage(finalMessage);
                 if (finalRole != null && player.isOnline()) {
-                    applyLuckPermsRole(player, finalRole, true);
+                    applyLuckPermsRole(player, finalRole, true, finalHasOpenTicket, true);
                 }
             });
         });
@@ -829,14 +841,14 @@ public final class GuiManager {
         String baseUrl = resolveProfileApiBaseUrl();
         String apiToken = resolveProfileApiToken();
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
-            player.sendMessage("§cUnverify ist nicht konfiguriert (api.base-url/api.profile-token bzw. api.token in config.yml).");
+            send(player, "unverify.not-configured");
             return;
         }
 
         String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         String payload = "{\"mcName\":\"" + player.getName() + "\",\"playerName\":\"" + player.getName() + "\"}";
 
-        player.sendMessage("§7Entferne Verifizierung ...");
+        send(player, "unverify.progress");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
@@ -873,7 +885,7 @@ public final class GuiManager {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 player.sendMessage(finalMessage);
                 if (finalSuccess && player.isOnline()) {
-                    applyLuckPermsRole(player, "default", true);
+                    applyLuckPermsRole(player, "default", false, false, true);
                 }
             });
         });
@@ -902,6 +914,7 @@ public final class GuiManager {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String resolvedRole = null;
+            boolean hasOpenTicket = false;
             try {
                 String query = URLEncoder.encode(playerName, StandardCharsets.UTF_8);
                 HttpRequest request = HttpRequest.newBuilder()
@@ -914,22 +927,31 @@ public final class GuiManager {
                 String body = response.body() == null ? "" : response.body();
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                    hasOpenTicket = hasAssignedOpenTicket(playerName);
                 }
             } catch (Exception ex) {
                 plugin.getLogger().warning("Role-Sync fehlgeschlagen für " + playerName + ": " + ex.getMessage());
             }
 
             String finalRole = resolvedRole;
+            boolean finalHasOpenTicket = hasOpenTicket;
             if (finalRole == null) {
                 return;
             }
             Bukkit.getScheduler().runTask(plugin, () -> {
                 Player online = Bukkit.getPlayer(player.getUniqueId());
                 if (online != null && online.isOnline()) {
-                    applyLuckPermsRole(online, finalRole, false);
+                    applyLuckPermsRole(online, finalRole, true, finalHasOpenTicket, false);
                 }
             });
         });
+    }
+
+    private boolean hasAssignedOpenTicket(String playerName) {
+        if (playerName == null || playerName.isBlank()) {
+            return false;
+        }
+        return !repository.listAssignedOpenOrderIds(playerName).isEmpty();
     }
 
     private HttpResponse<String> postWithFallback(
@@ -1040,42 +1062,71 @@ public final class GuiManager {
         return switch (normalizeRole(role)) {
             case "team" -> "Team";
             case "kunde" -> "Kunde";
-            default -> "Default";
+            default -> "Mitglied";
         };
     }
 
-    private void applyLuckPermsRole(Player player, String role, boolean force) {
+    private void applyLuckPermsRole(Player player, String role, boolean verified, boolean hasOpenTicket, boolean force) {
         String roleKey = normalizeRole(role);
         UUID playerId = player.getUniqueId();
-        String current = lastAppliedLuckPermsGroup.get(playerId);
-        if (!force && roleKey.equals(current)) {
+        String stateKey = roleKey + "|verified=" + verified + "|ticket=" + hasOpenTicket;
+        String current = lastAppliedLuckPermsState.get(playerId);
+        if (!force && stateKey.equals(current)) {
             return;
         }
 
-        String group = switch (roleKey) {
-            case "team" -> plugin.getConfig().getString("luckperms.group-team", "team");
-            case "kunde" -> plugin.getConfig().getString("luckperms.group-kunde", "kunde");
-            default -> plugin.getConfig().getString("luckperms.group-default", "default");
-        };
-        if (group == null || group.isBlank()) {
-            return;
-        }
-
-        String trimmedGroup = group.trim();
         String teamGroup = plugin.getConfig().getString("luckperms.group-team", "team");
         String kundeGroup = plugin.getConfig().getString("luckperms.group-kunde", "kunde");
         String defaultGroup = plugin.getConfig().getString("luckperms.group-default", "default");
+        String verifiedGroup = plugin.getConfig().getString("luckperms.group-verified", "mitglied");
+
+        Set<String> managedGroups = new LinkedHashSet<>();
+        for (String candidate : List.of(teamGroup, kundeGroup, defaultGroup, verifiedGroup)) {
+            if (candidate == null) {
+                continue;
+            }
+            String normalizedCandidate = candidate.trim();
+            if (!normalizedCandidate.isBlank()) {
+                managedGroups.add(normalizedCandidate);
+            }
+        }
+
+        Set<String> targetGroups = new LinkedHashSet<>();
+        if (verified) {
+            if (verifiedGroup != null && !verifiedGroup.isBlank()) {
+                targetGroups.add(verifiedGroup.trim());
+            }
+            if (roleKey.equals("team") && teamGroup != null && !teamGroup.isBlank()) {
+                targetGroups.add(teamGroup.trim());
+            }
+            boolean shouldHaveKunde = roleKey.equals("kunde") || hasOpenTicket;
+            if (shouldHaveKunde && kundeGroup != null && !kundeGroup.isBlank()) {
+                targetGroups.add(kundeGroup.trim());
+            }
+        } else {
+            if (defaultGroup != null && !defaultGroup.isBlank()) {
+                targetGroups.add(defaultGroup.trim());
+            }
+        }
+
+        if (targetGroups.isEmpty() && defaultGroup != null && !defaultGroup.isBlank()) {
+            targetGroups.add(defaultGroup.trim());
+        }
 
         boolean executed = true;
-        executed &= dispatchLuckPermsParentRemove(player.getName(), teamGroup);
-        executed &= dispatchLuckPermsParentRemove(player.getName(), kundeGroup);
-        executed &= dispatchLuckPermsParentRemove(player.getName(), defaultGroup);
-        executed &= Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + trimmedGroup);
+        for (String managedGroup : managedGroups) {
+            boolean shouldHave = targetGroups.stream().anyMatch(group -> group.equalsIgnoreCase(managedGroup));
+            if (shouldHave) {
+                executed &= Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + managedGroup);
+            } else {
+                executed &= dispatchLuckPermsParentRemove(player.getName(), managedGroup);
+            }
+        }
 
         if (executed) {
-            lastAppliedLuckPermsGroup.put(playerId, roleKey);
+            lastAppliedLuckPermsState.put(playerId, stateKey);
         } else {
-            plugin.getLogger().warning("LuckPerms-Role konnte nicht gesetzt werden für " + player.getName() + ": " + group);
+            plugin.getLogger().warning("LuckPerms-Rollen konnten nicht vollständig gesetzt werden für " + player.getName() + ": " + targetGroups);
         }
     }
 
@@ -1151,19 +1202,19 @@ public final class GuiManager {
             }
         } else if (sender instanceof ConsoleCommandSender) {
             if (worldName.isBlank()) {
-                sender.sendMessage("Usage: /nav status <world>");
+                sendWithPrefix(sender, "usage.nav.status", "Usage: /nav status <world>");
                 return;
             }
         }
 
         if (worldName.isBlank()) {
-            sender.sendMessage("Usage: /nav status <world>");
+            sendWithPrefix(sender, "usage.nav.status", "Usage: /nav status <world>");
             return;
         }
 
         Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
         if (entryOpt.isEmpty()) {
-            sender.sendMessage("§cWelt nicht gefunden: §f" + worldName);
+            sendWithPrefix(sender, "nav.status.world-not-found", "Welt nicht gefunden: %world%", "%world%", worldName);
             return;
         }
 
@@ -1173,11 +1224,11 @@ public final class GuiManager {
         String sourceType = (entry.sourceType() == null || entry.sourceType().isBlank()) ? "-" : entry.sourceType();
         String ticketOrderId = (entry.ticketOrderId() == null || entry.ticketOrderId().isBlank()) ? "-" : entry.ticketOrderId();
 
-        sender.sendMessage("§7[WorldsGUI] Status fuer Welt §f" + entry.worldName());
-        sender.sendMessage("§7- lifecycle: §f" + lifecycle);
-        sender.sendMessage("§7- visibility: §f" + visibility);
-        sender.sendMessage("§7- sourceType: §f" + sourceType);
-        sender.sendMessage("§7- ticketOrderId: §f" + ticketOrderId);
+        sendNoPrefixConfigured(sender, "nav.status.header", "[WorldsGUI] Status fuer Welt %world%", "%world%", entry.worldName());
+        sendNoPrefixConfigured(sender, "nav.status.lifecycle", "- lifecycle: %lifecycle%", "%lifecycle%", lifecycle);
+        sendNoPrefixConfigured(sender, "nav.status.visibility", "- visibility: %visibility%", "%visibility%", visibility);
+        sendNoPrefixConfigured(sender, "nav.status.source-type", "- sourceType: %sourceType%", "%sourceType%", sourceType);
+        sendNoPrefixConfigured(sender, "nav.status.ticket-order-id", "- ticketOrderId: %ticketOrderId%", "%ticketOrderId%", ticketOrderId);
     }
 
     public void executeNavMyWorldCreate(Player player, String worldName) {
@@ -1187,12 +1238,12 @@ public final class GuiManager {
 
         String normalizedWorld = worldName == null ? "" : worldName.trim();
         if (!WORLD_NAME_PATTERN.matcher(normalizedWorld).matches()) {
-            player.sendMessage("§cUngültiger Weltname. Erlaubt: 3-32 Zeichen (A-Z, 0-9, _, -)");
+            send(player, "world-name.invalid");
             return;
         }
 
         if (repository.findByWorldName(normalizedWorld).isPresent()) {
-            player.sendMessage("§cDiese Welt existiert bereits.");
+            send(player, "world.already-exists");
             return;
         }
 
@@ -1204,7 +1255,7 @@ public final class GuiManager {
             return;
         }
         if (!confirmed) {
-            player.sendMessage("§eNutze: /nav my-world delete <world-name> confirm");
+            send(player, "usage.nav.my-world.delete");
             return;
         }
         deleteWorld(player, worldName);
@@ -1827,6 +1878,11 @@ public final class GuiManager {
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
             sendPlain(player, "§cUngültiger Spielername.");
+            return;
+        }
+
+        if (normalizedTarget.equalsIgnoreCase(player.getName())) {
+            sendPlain(player, "§cDu kannst dich nicht selbst einladen.");
             return;
         }
 
@@ -3449,9 +3505,7 @@ public final class GuiManager {
             "SIMPLECLOUD_SERVICE_NAME",
             "SIMPLECLOUD_SERVICE_ID",
             "CLOUDNET_SERVICE_ID",
-            "CLOUDNET_SERVICE_NAME",
-            "SERVICE_NAME",
-            "SERVER_NAME"
+            "CLOUDNET_SERVICE_NAME"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
@@ -3498,7 +3552,8 @@ public final class GuiManager {
 
     private List<String> resolveSelectableServerNames() {
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
-        String localServer = resolveLocalServerId();
+        // Only use explicit cloud/config identity — never the Linux hostname fallback.
+        String localServer = resolveExplicitLocalServerId();
 
         boolean localBlocked = !localServer.isBlank()
             && blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, localServer));
@@ -3560,7 +3615,8 @@ public final class GuiManager {
     }
 
     private List<String> resolveFallbackServerNames(List<String> blockedServers) {
-        String local = resolveLocalServerId();
+        // Only use explicit cloud/config identity — never the Linux hostname fallback.
+        String local = resolveExplicitLocalServerId();
         if (local == null || local.isBlank()) {
             return List.of();
         }
@@ -3578,7 +3634,8 @@ public final class GuiManager {
         }
 
         String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
-        for (String path : List.of("/v0/services", "/v0/servers")) {
+        // Prefer the dedicated servers endpoint first (works more reliably on platform controller).
+        for (String path : List.of("/v0/servers?sort_order=asc", "/v0/servers", "/v0/services")) {
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(normalizedController + path))
@@ -3906,26 +3963,20 @@ public final class GuiManager {
         return false;
     }
 
+    public void sendWithPrefix(org.bukkit.command.CommandSender sender, String key, String fallbackLiteral, String... replacements) {
+        sendConfigured(sender, true, key, fallbackLiteral, replacements);
+    }
+
+    public void sendNoPrefixConfigured(org.bukkit.command.CommandSender sender, String key, String fallbackLiteral, String... replacements) {
+        sendConfigured(sender, false, key, fallbackLiteral, replacements);
+    }
+
     private void send(Player player, String key, String... replacements) {
-        if (isChatFeedbackSuppressed(player)) {
-            return;
-        }
-        String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
-        for (String line : readMessageLines("messages." + key, key, replacements)) {
-            String full = prefixTemplate.replace("%messages%", line);
-            player.sendMessage(parseFormattedMessage(full));
-        }
+        sendConfigured(player, true, key, key, replacements);
     }
 
     private void sendNoPrefix(Player player, String key, String... replacements) {
-        if (isChatFeedbackSuppressed(player)) {
-            return;
-        }
-        String noPrefixPath = "messages.no-prefix." + key;
-        String fallbackPath = "messages." + key;
-        for (String line : readMessageLines(noPrefixPath, fallbackPath, key, replacements)) {
-            player.sendMessage(parseFormattedMessage(line));
-        }
+        sendConfigured(player, false, key, key, replacements);
     }
 
     private boolean isChatFeedbackSuppressed(Player player) {
@@ -3933,10 +3984,111 @@ public final class GuiManager {
     }
 
     private void sendPlain(Player player, String message) {
-        if (isChatFeedbackSuppressed(player)) {
+        // chat-feedback=false should hide success output, but still show errors/warnings.
+        if (isChatFeedbackSuppressed(player) && message != null && message.startsWith("§a")) {
             return;
         }
         player.sendMessage(message);
+    }
+
+    private void sendConfigured(org.bukkit.command.CommandSender sender, boolean defaultWithPrefix, String key, String fallbackLiteral, String... replacements) {
+        if (sender == null) {
+            return;
+        }
+
+        MessageStyle style = resolveMessageStyle(key, defaultWithPrefix);
+        List<String> lines = readConfiguredMessageLines(key, style, fallbackLiteral, replacements);
+        String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
+
+        for (String line : lines) {
+            String output = style.withPrefix
+                ? prefixTemplate.replace("%messages%", line)
+                : line;
+            sender.sendMessage(parseFormattedMessage(output));
+        }
+    }
+
+    private MessageStyle resolveMessageStyle(String key, boolean defaultWithPrefix) {
+        String withPrefixPath = "messages.with-prefix." + key;
+        String noPrefixPath = "messages.no-prefix." + key;
+        boolean hasWithPrefix = hasMessagePath(withPrefixPath);
+        boolean hasNoPrefix = hasMessagePath(noPrefixPath);
+
+        if (hasWithPrefix && !hasNoPrefix) {
+            return MessageStyle.WITH_PREFIX;
+        }
+        if (hasNoPrefix && !hasWithPrefix) {
+            return MessageStyle.NO_PREFIX;
+        }
+        return defaultWithPrefix ? MessageStyle.WITH_PREFIX : MessageStyle.NO_PREFIX;
+    }
+
+    private boolean hasMessagePath(String path) {
+        Object value = plugin.getConfig().get(path);
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof String text) {
+            return !text.isBlank();
+        }
+        if (value instanceof List<?> list) {
+            return !list.isEmpty();
+        }
+        return true;
+    }
+
+    private List<String> readConfiguredMessageLines(String key, MessageStyle style, String fallbackLiteral, String... replacements) {
+        List<String> lines = new ArrayList<>();
+
+        if (style.withPrefix) {
+            lines = readMessageLinesFromPath("messages.with-prefix." + key);
+            if (lines.isEmpty()) {
+                lines = readMessageLinesFromPath("messages." + key);
+            }
+        } else {
+            lines = readMessageLinesFromPath("messages.no-prefix." + key);
+            if (lines.isEmpty()) {
+                lines = readMessageLinesFromPath("messages." + key);
+            }
+        }
+
+        if (lines.isEmpty()) {
+            lines.add(fallbackLiteral == null || fallbackLiteral.isBlank() ? key : fallbackLiteral);
+        }
+
+        return applyMessageReplacements(lines, replacements);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> readMessageLinesFromPath(String path) {
+        Object value = plugin.getConfig().get(path);
+        List<String> lines = new ArrayList<>();
+
+        if (value instanceof List<?> listValue) {
+            for (Object raw : listValue) {
+                if (raw != null) {
+                    lines.add(raw.toString());
+                }
+            }
+            return lines;
+        }
+
+        if (value instanceof String text && !text.isBlank()) {
+            lines.add(text);
+        }
+        return lines;
+    }
+
+    private List<String> applyMessageReplacements(List<String> lines, String... replacements) {
+        List<String> out = new ArrayList<>(lines.size());
+        for (String line : lines) {
+            String formatted = line;
+            for (int i = 0; i + 1 < replacements.length; i += 2) {
+                formatted = formatted.replace(replacements[i], replacements[i + 1]);
+            }
+            out.add(formatted);
+        }
+        return out;
     }
 
     private List<String> readMessageLines(String path, String fallbackKey, String... replacements) {
@@ -3974,6 +4126,17 @@ public final class GuiManager {
             out.add(formatted);
         }
         return out;
+    }
+
+    private enum MessageStyle {
+        WITH_PREFIX(true),
+        NO_PREFIX(false);
+
+        private final boolean withPrefix;
+
+        MessageStyle(boolean withPrefix) {
+            this.withPrefix = withPrefix;
+        }
     }
 
     private Component parseFormattedMessage(String input) {

@@ -16,11 +16,11 @@ public final class VerifyCommand implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("Dieser Befehl ist nur für Spieler.");
+            guiManager.sendWithPrefix(sender, "command.only-player", "Dieser Befehl ist nur für Spieler.");
             return true;
         }
         if (args.length < 1) {
-            player.sendMessage("Usage: /verify <4-digit-code>");
+            guiManager.sendWithPrefix(player, "usage.verify", "Usage: /verify <4-digit-code>");
             return true;
         }
         guiManager.executeVerify(player, args[0]);

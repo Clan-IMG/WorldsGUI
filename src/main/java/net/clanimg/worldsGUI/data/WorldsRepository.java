@@ -787,9 +787,7 @@ public final class WorldsRepository {
             "SIMPLECLOUD_SERVICE_NAME",
             "SIMPLECLOUD_SERVICE_ID",
             "CLOUDNET_SERVICE_ID",
-            "CLOUDNET_SERVICE_NAME",
-            "SERVICE_NAME",
-            "SERVER_NAME"
+            "CLOUDNET_SERVICE_NAME"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
