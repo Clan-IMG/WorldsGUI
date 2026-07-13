@@ -15,10 +15,6 @@ commands:
     description: Öffnet die WorldsGUI Navigation
     permission: worldsgui.command.nav
     usage: /nav [create|delete|join|my-world|setspawn|status|rename|icon]
-  setspawn:
-    description: Setzt den Spawn deiner ausgewählten Welt
-    permission: worldsgui.command.setspawn
-    usage: /setspawn
   rename:
     description: Ändert den Anzeigenamen der ausgewählten Welt
     permission: worldsgui.command.rename

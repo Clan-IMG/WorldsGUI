@@ -3,7 +3,6 @@ package net.clanimg.worldsGUI;
 import net.clanimg.worldsGUI.command.IconCommand;
 import net.clanimg.worldsGUI.command.NavCommand;
 import net.clanimg.worldsGUI.command.RenameCommand;
-import net.clanimg.worldsGUI.command.SetSpawnCommand;
 import net.clanimg.worldsGUI.command.UnverifyCommand;
 import net.clanimg.worldsGUI.command.VerifyCommand;
 import net.clanimg.worldsGUI.data.WorldsRepository;
@@ -108,9 +107,6 @@ public final class WorldsGUI extends JavaPlugin {
             getCommand("nav").setExecutor(navCommand);
             getCommand("nav").setTabCompleter(navCommand);
         }
-        if (getCommand("setspawn") != null) {
-            getCommand("setspawn").setExecutor(new SetSpawnCommand(guiManager));
-        }
         if (getCommand("rename") != null) {
             getCommand("rename").setExecutor(new RenameCommand(guiManager));
         }
@@ -135,7 +131,7 @@ public final class WorldsGUI extends JavaPlugin {
                     }
                     return true;
                 }
-                sender.sendMessage("Dieser Befehl ist nur für die Konsole.");
+                guiManager.sendWithPrefix(sender, "command.only-console", "Dieser Befehl ist nur für die Konsole.");
                 return true;
             });
         }
@@ -148,7 +144,7 @@ public final class WorldsGUI extends JavaPlugin {
                     }
                     return true;
                 }
-                sender.sendMessage("Dieser Befehl ist nur für die Konsole.");
+                guiManager.sendWithPrefix(sender, "command.only-console", "Dieser Befehl ist nur für die Konsole.");
                 return true;
             });
         }

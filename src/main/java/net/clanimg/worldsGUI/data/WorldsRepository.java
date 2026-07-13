@@ -7,7 +7,6 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.InetAddress;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -395,10 +394,11 @@ public final class WorldsRepository {
         patchOrWarn("/worlds/" + encode(worldName) + "/public", body);
     }
 
-    public void setDisplayName(String worldName, String value) {
+    public boolean setDisplayName(String worldName, String value) {
         JsonObject body = new JsonObject();
         body.addProperty("value", value);
-        patchOrWarn("/worlds/" + encode(worldName) + "/display-name", body);
+        body.addProperty("displayName", value);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/display-name", body);
     }
 
     public void setIcon(String worldName, String value) {
@@ -467,6 +467,45 @@ public final class WorldsRepository {
             }
         } catch (Exception ex) {
             warnThrottled("presence-ex", "Fehler beim Aktualisieren der Presence via API: " + ex.getMessage());
+        }
+    }
+
+    public void upsertPendingWorldTransfer(String playerName, String worldName) {
+        JsonObject body = new JsonObject();
+        body.addProperty("playerName", playerName);
+        if (worldName == null || worldName.isBlank()) {
+            body.add("worldName", null);
+        } else {
+            body.addProperty("worldName", worldName);
+        }
+
+        try {
+            ApiResponse response = request("PUT", "/worlds/presence/pending-world", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("pending-world", "Pending-World API Fehler: HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            warnThrottled("pending-world-ex", "Fehler beim Aktualisieren der Pending-World via API: " + ex.getMessage());
+        }
+    }
+
+    public String consumePendingWorldTransfer(String playerName) {
+        JsonObject body = new JsonObject();
+        body.addProperty("playerName", playerName);
+
+        try {
+            ApiResponse response = request("POST", "/worlds/presence/pending-world/consume", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("pending-world-consume", "Pending-World-Consume API Fehler: HTTP " + response.statusCode());
+                return "";
+            }
+
+            JsonObject json = parseObject(response.body());
+            String pendingWorld = getString(json, "pendingWorld", "");
+            return pendingWorld == null ? "" : pendingWorld.trim();
+        } catch (Exception ex) {
+            warnThrottled("pending-world-consume-ex", "Fehler beim Laden der Pending-World via API: " + ex.getMessage());
+            return "";
         }
     }
 
@@ -788,24 +827,12 @@ public final class WorldsRepository {
             "SIMPLECLOUD_SERVICE_NAME",
             "SIMPLECLOUD_SERVICE_ID",
             "CLOUDNET_SERVICE_ID",
-            "CLOUDNET_SERVICE_NAME",
-            "SERVICE_NAME",
-            "SERVER_NAME",
-            "HOSTNAME"
+            "CLOUDNET_SERVICE_NAME"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
                 return value.trim();
             }
-        }
-
-        try {
-            String host = InetAddress.getLocalHost().getHostName();
-            if (host != null && !host.isBlank()) {
-                return host.trim();
-            }
-        } catch (Exception ignored) {
-            // Best-effort fallback only.
         }
         return "";
     }

@@ -3,6 +3,7 @@ package net.clanimg.worldsGUI.gui;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -13,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
@@ -73,6 +75,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.GameRule;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -157,10 +160,12 @@ public final class GuiManager {
     private final Map<UUID, String> selectedWorldByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, PendingInput> pendingInputs = new ConcurrentHashMap<>();
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
-    private final Map<UUID, String> lastAppliedLuckPermsGroup = new ConcurrentHashMap<>();
+    private final Map<UUID, String> lastAppliedLuckPermsState = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
+    private final Set<UUID> suppressedChatFeedbackPlayers = ConcurrentHashMap.newKeySet();
     private volatile boolean warnedMissingLocalServerId;
     private volatile boolean warnedMissingExplicitServerIdForAutoCreate;
+    private volatile boolean warnedBlockedLocalServerForAutoCreate;
     private volatile GuiConfig guiConfig;
     private final PlayerSessionManager playerSessions = new PlayerSessionManager();
     private final TriggerDispatcher triggerDispatcher;
@@ -172,7 +177,19 @@ public final class GuiManager {
         this.configuredGameRuleCommands = loadConfiguredGameRuleCommands();
         this.triggerDispatcher = new TriggerDispatcher(
             this::openGui,
-            (player, command) -> Bukkit.dispatchCommand(player, command),
+            (player, command, chatFeedback) -> {
+                UUID playerId = player.getUniqueId();
+                if (!chatFeedback) {
+                    suppressedChatFeedbackPlayers.add(playerId);
+                }
+                try {
+                    Bukkit.dispatchCommand(player, command);
+                } finally {
+                    if (!chatFeedback) {
+                        suppressedChatFeedbackPlayers.remove(playerId);
+                    }
+                }
+            },
             this::requestAnvilInput
         );
     }
@@ -181,7 +198,7 @@ public final class GuiManager {
         selectedWorldByPlayer.clear();
         pendingInputs.clear();
         pendingDeleteByPlayer.clear();
-        lastAppliedLuckPermsGroup.clear();
+        lastAppliedLuckPermsState.clear();
         playerSessions.clear();
         pendingAnvilInputs.clear();
     }
@@ -275,7 +292,7 @@ public final class GuiManager {
             }
 
             String title = PlaceholderExpander.expand(titleTemplate, player, session, Map.of());
-            inventory.setItem(absolute, buildRuntimeItem(materialTemplate, title == null ? "" : title, player, Map.of()));
+            inventory.setItem(absolute, buildRuntimeItem(materialTemplate, title == null ? "" : title, player, session, Map.of()));
 
             if (slotDefinition.action() != null) {
                 holder.putClickHandler(absolute, slotDefinition.action(), Map.of());
@@ -295,7 +312,7 @@ public final class GuiManager {
             int absolute = range.from() + i;
             Map<String, String> extra = items.get(i);
             String title = PlaceholderExpander.expand(range.title(), player, session, extra);
-            inventory.setItem(absolute, buildRuntimeItem(range.material(), title == null ? "" : title, player, extra));
+            inventory.setItem(absolute, buildRuntimeItem(range.material(), title == null ? "" : title, player, session, extra));
 
             if (range.action() != null) {
                 holder.putClickHandler(absolute, range.action(), extra);
@@ -368,24 +385,31 @@ public final class GuiManager {
         }
 
         if ("luckperms-players".equalsIgnoreCase(source)) {
-            List<String> players = new ArrayList<>();
-            for (Player online : Bukkit.getOnlinePlayers()) {
-                players.add(online.getName());
-            }
-            for (OfflinePlayer offline : Bukkit.getOfflinePlayers()) {
-                if (offline.getName() != null && !offline.getName().isBlank()) {
-                    players.add(offline.getName());
+            List<String> players = resolveRegisteredLuckPermsPlayers();
+            if (players.isEmpty()) {
+                for (Player online : Bukkit.getOnlinePlayers()) {
+                    players.add(online.getName());
+                }
+                for (OfflinePlayer offline : Bukkit.getOfflinePlayers()) {
+                    if (offline.getName() != null && !offline.getName().isBlank()) {
+                        players.add(offline.getName());
+                    }
                 }
             }
-            return toPlayerSlotItems(players, filter);
+            return toPlayerSlotItems(players, filter, player.getName());
         }
         return List.of();
     }
 
     private List<Map<String, String>> toPlayerSlotItems(List<String> players, String filter) {
+        return toPlayerSlotItems(players, filter, null);
+    }
+
+    private List<Map<String, String>> toPlayerSlotItems(List<String> players, String filter, String excludePlayerName) {
         List<Map<String, String>> items = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         String normalizedFilter = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
+        String excluded = excludePlayerName == null ? "" : excludePlayerName.trim().toLowerCase(Locale.ROOT);
 
         for (String playerName : players) {
             if (playerName == null) {
@@ -394,6 +418,15 @@ public final class GuiManager {
 
             String normalized = playerName.trim();
             if (normalized.isBlank()) {
+                continue;
+            }
+
+            // Blendet unerwünschte Dummy-Einträge aus, die in manchen Setups in der Liste landen.
+            if ("dynamic".equalsIgnoreCase(normalized)) {
+                continue;
+            }
+
+            if (!excluded.isBlank() && normalized.equalsIgnoreCase(excludePlayerName)) {
                 continue;
             }
 
@@ -440,17 +473,20 @@ public final class GuiManager {
         return material;
     }
 
-    private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, Map<String, String> extra) {
+    private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
         String token = materialTemplate == null ? "" : materialTemplate.trim();
         if ("%player_head%".equalsIgnoreCase(token)) {
-            return buildPlayerHeadItem(title, player, extra);
+            return buildPlayerHeadItem(title, player, session, extra);
+        }
+        if ("%target_player_head%".equalsIgnoreCase(token)) {
+            return buildPlayerHeadItem(title, player, session, extra);
         }
 
         Material material = resolveMaterial(materialTemplate);
         return namedItem(material, title);
     }
 
-    private ItemStack buildPlayerHeadItem(String title, Player player, Map<String, String> extra) {
+    private ItemStack buildPlayerHeadItem(String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
         ItemStack item = new ItemStack(Material.PLAYER_HEAD);
         ItemMeta meta = item.getItemMeta();
         if (!(meta instanceof SkullMeta skullMeta)) {
@@ -463,6 +499,9 @@ public final class GuiManager {
                 extra.get("target_player_name"),
                 extra.get("player_name")
             );
+        }
+        if (targetName == null || targetName.isBlank()) {
+            targetName = PlaceholderExpander.expand("%target_player_name%", player, session, extra);
         }
         if (targetName == null || targetName.isBlank()) {
             targetName = player == null ? null : player.getName();
@@ -534,6 +573,7 @@ public final class GuiManager {
                 selectedWorldByPlayer.put(player.getUniqueId(), worldName);
                 PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
                 session.setCurrentWorld(worldName);
+                session.pushCurrentToHistory();
                 openGui(player, "edit-world");
             }
         }
@@ -545,6 +585,103 @@ public final class GuiManager {
         }
         openGui(player, "my-worlds");
         syncAssignedTicketWorlds(player);
+    }
+
+    /**
+     * Holt registrierte User aus LuckPerms (falls verfügbar) ohne harte Compile-Abhängigkeit.
+     * Fällt auf eine leere Liste zurück, wenn LuckPerms fehlt oder die API nicht erreichbar ist.
+     */
+    private List<String> resolveRegisteredLuckPermsPlayers() {
+        List<String> names = new ArrayList<>();
+        try {
+            Class<?> providerClass = Class.forName("net.luckperms.api.LuckPermsProvider");
+            Object api = providerClass.getMethod("get").invoke(null);
+            if (api == null) {
+                return names;
+            }
+
+            Object userManager = api.getClass().getMethod("getUserManager").invoke(api);
+            if (userManager == null) {
+                return names;
+            }
+
+            Object uniqueUsersObj = userManager.getClass().getMethod("getUniqueUsers").invoke(userManager);
+            if (!(uniqueUsersObj instanceof Iterable<?> uniqueUsers)) {
+                return names;
+            }
+
+            Method lookupUsernameMethod = null;
+            Method getUserMethod = null;
+            Method userGetUsernameMethod = null;
+            try {
+                lookupUsernameMethod = userManager.getClass().getMethod("lookupUsername", UUID.class);
+            } catch (NoSuchMethodException ignored) {
+                // Ältere/abweichende API-Variante: dann nur Bukkit-Namenauflösung.
+            }
+            try {
+                getUserMethod = userManager.getClass().getMethod("getUser", UUID.class);
+            } catch (NoSuchMethodException ignored) {
+                // Optional.
+            }
+
+            for (Object entry : uniqueUsers) {
+                if (!(entry instanceof UUID uuid)) {
+                    continue;
+                }
+
+                String name = null;
+                if (getUserMethod != null) {
+                    Object userObj = getUserMethod.invoke(userManager, uuid);
+                    if (userObj != null) {
+                        if (userGetUsernameMethod == null) {
+                            try {
+                                userGetUsernameMethod = userObj.getClass().getMethod("getUsername");
+                            } catch (NoSuchMethodException ignored) {
+                                // Dann bleibt nur lookupUsername/Bukkit-Fallback.
+                            }
+                        }
+                        if (userGetUsernameMethod != null) {
+                            Object loadedName = userGetUsernameMethod.invoke(userObj);
+                            if (loadedName instanceof String s && !s.isBlank()) {
+                                name = s;
+                            }
+                        }
+                    }
+                }
+
+                if (lookupUsernameMethod != null) {
+                    Object futureObj = lookupUsernameMethod.invoke(userManager, uuid);
+                    if (futureObj instanceof CompletableFuture<?> future) {
+                        Object resolved = future.getNow(null);
+                        if (!(resolved instanceof String)) {
+                            try {
+                                // Kurzer, begrenzter Wait für Cache/Storage-Antwort ohne langen Main-Thread-Block.
+                                resolved = future.get(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+                            } catch (Exception ignored) {
+                                resolved = null;
+                            }
+                        }
+                        if (resolved instanceof String s && !s.isBlank()) {
+                            name = s;
+                        }
+                    }
+                }
+
+                if (name == null || name.isBlank()) {
+                    OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+                    if (offline != null && offline.getName() != null && !offline.getName().isBlank()) {
+                        name = offline.getName();
+                    }
+                }
+
+                if (name != null && !name.isBlank()) {
+                    names.add(name);
+                }
+            }
+        } catch (Throwable ignored) {
+            // LuckPerms nicht vorhanden oder API nicht verfügbar -> Fallback erfolgt beim Aufrufer.
+        }
+        return names;
     }
 
     public void executeSetSpawn(Player player) {
@@ -707,6 +844,7 @@ public final class GuiManager {
                 }
 
                 applyConfiguredGameRules(world);
+                applyWorldGuardProtection(world, ownerUuid, ownerName, List.of(), List.of());
 
                 setAnyGameRule(world, false, "spawn_mobs", "doMobSpawning");
                 setAnyGameRule(world, false, "advance_weather", "weather_cycle", "doWeatherCycle");
@@ -740,25 +878,26 @@ public final class GuiManager {
 
         String code = codeRaw == null ? "" : codeRaw.trim();
         if (!code.matches("\\d{4}")) {
-            player.sendMessage("§cUsage: /verify <4-digit-code>");
+            send(player, "usage.verify");
             return;
         }
 
         String baseUrl = resolveProfileApiBaseUrl();
         String apiToken = resolveProfileApiToken();
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
-            player.sendMessage("§cVerify ist nicht konfiguriert (api.base-url/api.profile-token bzw. api.token in config.yml).");
+            send(player, "verify.not-configured");
             return;
         }
 
         String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         String payload = "{\"mcName\":\"" + player.getName() + "\",\"code\":\"" + code + "\",\"playerName\":\"" + player.getName() + "\"}";
 
-        player.sendMessage("§7Prüfe Verify-Code ...");
+        send(player, "verify.progress");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
             String resolvedRole = null;
+            boolean hasOpenTicket = false;
             try {
                 HttpResponse<String> response = postWithFallback(
                     normalizedBase,
@@ -781,6 +920,7 @@ public final class GuiManager {
 
                 if (verified) {
                     resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                    hasOpenTicket = hasAssignedOpenTicket(player.getName());
                     message = "§aMinecraft-Profil erfolgreich verifiziert. §7Rolle: §f" + displayRoleLabel(resolvedRole);
                 } else {
                     String error = extractJsonString(body, "error");
@@ -798,10 +938,11 @@ public final class GuiManager {
 
             String finalMessage = message;
             String finalRole = resolvedRole;
+            boolean finalHasOpenTicket = hasOpenTicket;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 player.sendMessage(finalMessage);
                 if (finalRole != null && player.isOnline()) {
-                    applyLuckPermsRole(player, finalRole, true);
+                    applyLuckPermsRole(player, finalRole, true, finalHasOpenTicket, true);
                 }
             });
         });
@@ -815,14 +956,14 @@ public final class GuiManager {
         String baseUrl = resolveProfileApiBaseUrl();
         String apiToken = resolveProfileApiToken();
         if (baseUrl == null || baseUrl.isBlank() || apiToken == null || apiToken.isBlank()) {
-            player.sendMessage("§cUnverify ist nicht konfiguriert (api.base-url/api.profile-token bzw. api.token in config.yml).");
+            send(player, "unverify.not-configured");
             return;
         }
 
         String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         String payload = "{\"mcName\":\"" + player.getName() + "\",\"playerName\":\"" + player.getName() + "\"}";
 
-        player.sendMessage("§7Entferne Verifizierung ...");
+        send(player, "unverify.progress");
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String message;
@@ -837,8 +978,13 @@ public final class GuiManager {
                 );
                 String body = response.body() == null ? "" : response.body();
 
+                boolean alreadyUnverified = jsonBooleanFieldIsTrue(body, "alreadyUnverified");
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     message = "§aMinecraft-Verifizierung wurde entfernt.";
+                    success = true;
+                } else if (alreadyUnverified) {
+                    message = "§eDu bist bereits unverifiziert.";
+                    // No-op: lokale Gruppen trotzdem konsistent auf unverifiziert/default setzen.
                     success = true;
                 } else {
                     String error = extractJsonString(body, "error");
@@ -859,7 +1005,7 @@ public final class GuiManager {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 player.sendMessage(finalMessage);
                 if (finalSuccess && player.isOnline()) {
-                    applyLuckPermsRole(player, "default", true);
+                    applyLuckPermsRole(player, "default", false, false, true);
                 }
             });
         });
@@ -888,6 +1034,8 @@ public final class GuiManager {
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String resolvedRole = null;
+            boolean verified = false;
+            boolean hasOpenTicket = false;
             try {
                 String query = URLEncoder.encode(playerName, StandardCharsets.UTF_8);
                 HttpRequest request = HttpRequest.newBuilder()
@@ -900,22 +1048,33 @@ public final class GuiManager {
                 String body = response.body() == null ? "" : response.body();
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "ok")) {
                     resolvedRole = normalizeRole(extractJsonString(body, "role"));
+                    verified = jsonBooleanFieldIsTrue(body, "verified");
+                    hasOpenTicket = hasAssignedOpenTicket(playerName);
                 }
             } catch (Exception ex) {
                 plugin.getLogger().warning("Role-Sync fehlgeschlagen für " + playerName + ": " + ex.getMessage());
             }
 
             String finalRole = resolvedRole;
+            boolean finalVerified = verified;
+            boolean finalHasOpenTicket = hasOpenTicket;
             if (finalRole == null) {
                 return;
             }
             Bukkit.getScheduler().runTask(plugin, () -> {
                 Player online = Bukkit.getPlayer(player.getUniqueId());
                 if (online != null && online.isOnline()) {
-                    applyLuckPermsRole(online, finalRole, false);
+                    applyLuckPermsRole(online, finalRole, finalVerified, finalHasOpenTicket, false);
                 }
             });
         });
+    }
+
+    private boolean hasAssignedOpenTicket(String playerName) {
+        if (playerName == null || playerName.isBlank()) {
+            return false;
+        }
+        return !repository.listAssignedOpenOrderIds(playerName).isEmpty();
     }
 
     private HttpResponse<String> postWithFallback(
@@ -1026,42 +1185,72 @@ public final class GuiManager {
         return switch (normalizeRole(role)) {
             case "team" -> "Team";
             case "kunde" -> "Kunde";
-            default -> "Default";
+            default -> "Mitglied";
         };
     }
 
-    private void applyLuckPermsRole(Player player, String role, boolean force) {
+    private void applyLuckPermsRole(Player player, String role, boolean verified, boolean hasOpenTicket, boolean force) {
         String roleKey = normalizeRole(role);
         UUID playerId = player.getUniqueId();
-        String current = lastAppliedLuckPermsGroup.get(playerId);
-        if (!force && roleKey.equals(current)) {
+        String stateKey = roleKey + "|verified=" + verified + "|ticket=" + hasOpenTicket;
+        String current = lastAppliedLuckPermsState.get(playerId);
+        if (!force && stateKey.equals(current)) {
             return;
         }
 
-        String group = switch (roleKey) {
-            case "team" -> plugin.getConfig().getString("luckperms.group-team", "team");
-            case "kunde" -> plugin.getConfig().getString("luckperms.group-kunde", "kunde");
-            default -> plugin.getConfig().getString("luckperms.group-default", "default");
-        };
-        if (group == null || group.isBlank()) {
-            return;
-        }
-
-        String trimmedGroup = group.trim();
         String teamGroup = plugin.getConfig().getString("luckperms.group-team", "team");
         String kundeGroup = plugin.getConfig().getString("luckperms.group-kunde", "kunde");
         String defaultGroup = plugin.getConfig().getString("luckperms.group-default", "default");
+        String verifiedGroup = plugin.getConfig().getString("luckperms.group-verified", "mitglied");
+
+        Set<String> managedGroups = new LinkedHashSet<>();
+        for (String candidate : List.of(teamGroup, kundeGroup, defaultGroup, verifiedGroup)) {
+            if (candidate == null) {
+                continue;
+            }
+            String normalizedCandidate = candidate.trim();
+            if (!normalizedCandidate.isBlank()) {
+                managedGroups.add(normalizedCandidate);
+            }
+        }
+
+        Set<String> targetGroups = new LinkedHashSet<>();
+        if (defaultGroup != null && !defaultGroup.isBlank()) {
+            // Die Default-Gruppe bleibt immer am User und wird bei jedem Sync ggf. erneut gesetzt.
+            targetGroups.add(defaultGroup.trim());
+        }
+
+        if (verified) {
+            if (verifiedGroup != null && !verifiedGroup.isBlank()) {
+                targetGroups.add(verifiedGroup.trim());
+            }
+            if (roleKey.equals("team") && teamGroup != null && !teamGroup.isBlank()) {
+                targetGroups.add(teamGroup.trim());
+            }
+            boolean shouldHaveKunde = roleKey.equals("kunde") || hasOpenTicket;
+            if (shouldHaveKunde && kundeGroup != null && !kundeGroup.isBlank()) {
+                targetGroups.add(kundeGroup.trim());
+            }
+        }
+
+        if (targetGroups.isEmpty() && defaultGroup != null && !defaultGroup.isBlank()) {
+            targetGroups.add(defaultGroup.trim());
+        }
 
         boolean executed = true;
-        executed &= dispatchLuckPermsParentRemove(player.getName(), teamGroup);
-        executed &= dispatchLuckPermsParentRemove(player.getName(), kundeGroup);
-        executed &= dispatchLuckPermsParentRemove(player.getName(), defaultGroup);
-        executed &= Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + trimmedGroup);
+        for (String managedGroup : managedGroups) {
+            boolean shouldHave = targetGroups.stream().anyMatch(group -> group.equalsIgnoreCase(managedGroup));
+            if (shouldHave) {
+                executed &= Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + managedGroup);
+            } else {
+                executed &= dispatchLuckPermsParentRemove(player.getName(), managedGroup);
+            }
+        }
 
         if (executed) {
-            lastAppliedLuckPermsGroup.put(playerId, roleKey);
+            lastAppliedLuckPermsState.put(playerId, stateKey);
         } else {
-            plugin.getLogger().warning("LuckPerms-Role konnte nicht gesetzt werden für " + player.getName() + ": " + group);
+            plugin.getLogger().warning("LuckPerms-Rollen konnten nicht vollständig gesetzt werden für " + player.getName() + ": " + targetGroups);
         }
     }
 
@@ -1137,19 +1326,19 @@ public final class GuiManager {
             }
         } else if (sender instanceof ConsoleCommandSender) {
             if (worldName.isBlank()) {
-                sender.sendMessage("Usage: /nav status <world>");
+                sendWithPrefix(sender, "usage.nav.status", "Usage: /nav status <world>");
                 return;
             }
         }
 
         if (worldName.isBlank()) {
-            sender.sendMessage("Usage: /nav status <world>");
+            sendWithPrefix(sender, "usage.nav.status", "Usage: /nav status <world>");
             return;
         }
 
         Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
         if (entryOpt.isEmpty()) {
-            sender.sendMessage("§cWelt nicht gefunden: §f" + worldName);
+            sendWithPrefix(sender, "nav.status.world-not-found", "Welt nicht gefunden: %world%", "%world%", worldName);
             return;
         }
 
@@ -1159,11 +1348,11 @@ public final class GuiManager {
         String sourceType = (entry.sourceType() == null || entry.sourceType().isBlank()) ? "-" : entry.sourceType();
         String ticketOrderId = (entry.ticketOrderId() == null || entry.ticketOrderId().isBlank()) ? "-" : entry.ticketOrderId();
 
-        sender.sendMessage("§7[WorldsGUI] Status fuer Welt §f" + entry.worldName());
-        sender.sendMessage("§7- lifecycle: §f" + lifecycle);
-        sender.sendMessage("§7- visibility: §f" + visibility);
-        sender.sendMessage("§7- sourceType: §f" + sourceType);
-        sender.sendMessage("§7- ticketOrderId: §f" + ticketOrderId);
+        sendNoPrefixConfigured(sender, "nav.status.header", "[WorldsGUI] Status fuer Welt %world%", "%world%", entry.worldName());
+        sendNoPrefixConfigured(sender, "nav.status.lifecycle", "- lifecycle: %lifecycle%", "%lifecycle%", lifecycle);
+        sendNoPrefixConfigured(sender, "nav.status.visibility", "- visibility: %visibility%", "%visibility%", visibility);
+        sendNoPrefixConfigured(sender, "nav.status.source-type", "- sourceType: %sourceType%", "%sourceType%", sourceType);
+        sendNoPrefixConfigured(sender, "nav.status.ticket-order-id", "- ticketOrderId: %ticketOrderId%", "%ticketOrderId%", ticketOrderId);
     }
 
     public void executeNavMyWorldCreate(Player player, String worldName) {
@@ -1173,12 +1362,12 @@ public final class GuiManager {
 
         String normalizedWorld = worldName == null ? "" : worldName.trim();
         if (!WORLD_NAME_PATTERN.matcher(normalizedWorld).matches()) {
-            player.sendMessage("§cUngültiger Weltname. Erlaubt: 3-32 Zeichen (A-Z, 0-9, _, -)");
+            send(player, "world-name.invalid");
             return;
         }
 
         if (repository.findByWorldName(normalizedWorld).isPresent()) {
-            player.sendMessage("§cDiese Welt existiert bereits.");
+            send(player, "world.already-exists");
             return;
         }
 
@@ -1190,7 +1379,7 @@ public final class GuiManager {
             return;
         }
         if (!confirmed) {
-            player.sendMessage("§eNutze: /nav my-world delete <world-name> confirm");
+            send(player, "usage.nav.my-world.delete");
             return;
         }
         deleteWorld(player, worldName);
@@ -1219,7 +1408,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1236,22 +1425,23 @@ public final class GuiManager {
         }
 
         if (!containsIgnoreCase(entry.invitedPlayers(), normalizedTarget)) {
-            player.sendMessage("§cSpieler ist nicht eingeladen und kann nicht getrusted werden.");
+            sendPlain(player, "§cSpieler ist nicht eingeladen und kann nicht getrusted werden.");
             return;
         }
 
         List<String> trusted = new ArrayList<>(entry.trustedPlayers());
         if (containsIgnoreCase(trusted, normalizedTarget)) {
-            player.sendMessage("§eSpieler ist bereits getrusted.");
+            sendPlain(player, "§eSpieler ist bereits getrusted.");
             return;
         }
 
         trusted.add(normalizedTarget);
         if (!repository.setTrustedPlayers(worldName, trusted)) {
-            player.sendMessage("§cTrust konnte nicht gespeichert werden (API-Fehler).");
+            sendPlain(player, "§cTrust konnte nicht gespeichert werden (API-Fehler).");
             return;
         }
-        player.sendMessage("§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
+        refreshWorldGuardProtection(worldName);
+        sendPlain(player, "§aSpieler §f" + normalizedTarget + " §ahat jetzt Baurechte in §f" + worldName + "§a.");
     }
 
     public void executeNavMyWorldUntrust(Player player, String worldName, String targetPlayer) {
@@ -1261,7 +1451,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1279,15 +1469,16 @@ public final class GuiManager {
 
         List<String> trusted = new ArrayList<>(entry.trustedPlayers());
         if (!removeIgnoreCase(trusted, normalizedTarget)) {
-            player.sendMessage("§eSpieler hat aktuell keinen Trust-Status.");
+            sendPlain(player, "§eSpieler hat aktuell keinen Trust-Status.");
             return;
         }
 
         if (!repository.setTrustedPlayers(worldName, trusted)) {
-            player.sendMessage("§cUntrust konnte nicht gespeichert werden (API-Fehler).");
+            sendPlain(player, "§cUntrust konnte nicht gespeichert werden (API-Fehler).");
             return;
         }
-        player.sendMessage("§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
+        refreshWorldGuardProtection(worldName);
+        sendPlain(player, "§aTrust für §f" + normalizedTarget + " §awurde entfernt.");
     }
 
     public void executeNavMyWorldInvite(Player player, String worldName, String targetPlayer) {
@@ -1500,6 +1691,11 @@ public final class GuiManager {
             return;
         }
 
+        if (isBlockedServerName(normalizedServer)) {
+            player.sendMessage("§cDieser Server ist für neue Welten gesperrt: §f" + normalizedServer);
+            return;
+        }
+
         List<String> selectableServers = resolveSelectableServerNames();
         if (!selectableServers.isEmpty() && selectableServers.stream().noneMatch(server -> server.equalsIgnoreCase(normalizedServer))) {
             player.sendMessage("§cUnbekannter Server: §f" + normalizedServer);
@@ -1535,10 +1731,15 @@ public final class GuiManager {
 
         int confirmCode = ThreadLocalRandom.current().nextInt(100, 1000);
         long expiresAt = System.currentTimeMillis() + 30_000L;
-        PendingDeleteConfirmation pending = new PendingDeleteConfirmation(worldName, confirmCode, expiresAt);
+        boolean archiveOnly = isTicketWorld(entry);
+        PendingDeleteConfirmation pending = new PendingDeleteConfirmation(worldName, confirmCode, expiresAt, archiveOnly);
         pendingDeleteByPlayer.put(player.getUniqueId(), pending);
 
-        player.sendMessage("§eArchivierung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        if (archiveOnly) {
+            player.sendMessage("§eArchivierung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        } else {
+            player.sendMessage("§eLöschung bestätigen mit: §f/nav confirm " + confirmCode + " §7(innerhalb 30 Sekunden)");
+        }
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             PendingDeleteConfirmation current = pendingDeleteByPlayer.get(player.getUniqueId());
@@ -1584,7 +1785,11 @@ public final class GuiManager {
         }
 
         pendingDeleteByPlayer.remove(player.getUniqueId());
-        deleteWorld(player, pending.worldName());
+        if (pending.archiveOnly()) {
+            archiveWorld(player, pending.worldName());
+        } else {
+            deleteWorld(player, pending.worldName());
+        }
     }
 
     public List<String> listOwnedWorldNames(Player player) {
@@ -1692,7 +1897,18 @@ public final class GuiManager {
     }
 
     public void ensurePersonalFlatWorldForJoin(Player player) {
-        String localServer = resolveExplicitLocalServerId();
+        String localServer = resolveLocalServerId();
+
+        if (!localServer.isBlank() && isBlockedServerName(localServer)) {
+            if (!warnedBlockedLocalServerForAutoCreate) {
+                warnedBlockedLocalServerForAutoCreate = true;
+                plugin.getLogger().warning(
+                    "Auto-Welt-Erstellung beim Join ist für diesen Server deaktiviert, " +
+                    "weil api.blocked-server-names die lokale Server-ID enthält: " + localServer
+                );
+            }
+            return;
+        }
 
         List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
         boolean hasEligibleWorld;
@@ -1810,7 +2026,12 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
+            return;
+        }
+
+        if (normalizedTarget.equalsIgnoreCase(player.getName())) {
+            sendPlain(player, "§cDu kannst dich nicht selbst einladen.");
             return;
         }
 
@@ -1828,17 +2049,31 @@ public final class GuiManager {
 
         List<String> invited = new ArrayList<>(entry.invitedPlayers());
         if (containsIgnoreCase(invited, normalizedTarget)) {
-            player.sendMessage("§eSpieler ist bereits eingeladen.");
+            sendPlain(player, "§eSpieler ist bereits eingeladen.");
             return;
         }
 
         invited.add(normalizedTarget);
         if (!repository.setInvitedPlayers(worldName, invited)) {
-            player.sendMessage("§cEinladung konnte nicht gespeichert werden (API-Fehler).");
+            sendPlain(player, "§cEinladung konnte nicht gespeichert werden (API-Fehler).");
             return;
         }
         refreshWorldGuardProtection(worldName);
-        player.sendMessage("§aSpieler §f" + normalizedTarget + " §awurde für §f" + worldName + " §aeingeladen.");
+        sendPlain(player, "§aSpieler §f" + normalizedTarget + " §awurde für §f" + worldName + " §aeingeladen.");
+
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
+            session.clearParam("search");
+            String previousGuiId = session.popHistory();
+            String previousPreviousGuiId = session.popHistory();
+            String targetGuiId = previousPreviousGuiId != null && !previousPreviousGuiId.isBlank()
+                ? previousPreviousGuiId
+                : previousGuiId;
+            if (targetGuiId != null && !targetGuiId.isBlank()) {
+                session.setCurrentGuiId(targetGuiId);
+                openGui(player, targetGuiId);
+            }
+        }
     }
 
     public void executeNavCustomerRemove(Player player, String worldName, String targetPlayer) {
@@ -1853,7 +2088,7 @@ public final class GuiManager {
 
         String normalizedTarget = normalizePlayerName(targetPlayer);
         if (normalizedTarget == null) {
-            player.sendMessage("§cUngültiger Spielername.");
+            sendPlain(player, "§cUngültiger Spielername.");
             return;
         }
 
@@ -1871,7 +2106,7 @@ public final class GuiManager {
 
         List<String> invited = new ArrayList<>(entry.invitedPlayers());
         if (!removeIgnoreCase(invited, normalizedTarget)) {
-            player.sendMessage("§eSpieler ist für diese Welt nicht eingeladen.");
+            sendPlain(player, "§eSpieler ist für diese Welt nicht eingeladen.");
             return;
         }
 
@@ -1879,15 +2114,16 @@ public final class GuiManager {
         removeIgnoreCase(trusted, normalizedTarget);
 
         if (!repository.setInvitedPlayers(worldName, invited)) {
-            player.sendMessage("§cEinladung konnte nicht entfernt werden (API-Fehler).");
+            sendPlain(player, "§cEinladung konnte nicht entfernt werden (API-Fehler).");
             return;
         }
         if (!repository.setTrustedPlayers(worldName, trusted)) {
-            player.sendMessage("§cTrust-Status konnte nicht aktualisiert werden (API-Fehler).");
+            sendPlain(player, "§cTrust-Status konnte nicht aktualisiert werden (API-Fehler).");
             return;
         }
         refreshWorldGuardProtection(worldName);
-        player.sendMessage("§aEinladung für §f" + normalizedTarget + " §awurde entfernt.");
+        sendPlain(player, "§aEinladung für §f" + normalizedTarget + " §awurde entfernt.");
+        forcePlayerOutOfWorldIfNeeded(normalizedTarget, worldName);
     }
 
     public void executeNavCustomerTrust(Player player, String targetPlayer) {
@@ -2012,6 +2248,29 @@ public final class GuiManager {
 
     public boolean executeDashboardJoin(Player player, String worldName) {
         return joinWorld(player, worldName, false);
+    }
+
+    public void handlePlayerJoin(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String pendingWorldName = repository.consumePendingWorldTransfer(player.getName());
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(player.getUniqueId());
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+
+                if (pendingWorldName != null && !pendingWorldName.isBlank()) {
+                    schedulePendingWorldTransferJoin(online, pendingWorldName, 20L, 10);
+                    return;
+                }
+
+                ensurePersonalFlatWorldForJoin(online);
+            });
+        });
     }
 
     public void notifyCustomerActiveTicketOnJoin(Player player) {
@@ -2320,6 +2579,13 @@ public final class GuiManager {
         }
 
         if (args.length == 0) {
+            try {
+                showRenameInputDialog(player, worldName);
+                return;
+            } catch (Throwable t) {
+                plugin.getLogger().warning("Dialog-API für Rename fehlgeschlagen (" + t.getMessage() + "), nutze Chat-Fallback.");
+            }
+
             pendingInputs.put(player.getUniqueId(), new PendingInput(PendingType.RENAME, worldName));
             send(player, "rename-prompt");
             return;
@@ -2327,6 +2593,49 @@ public final class GuiManager {
 
         String newName = String.join(" ", args).trim();
         applyRename(player, worldName, newName);
+    }
+
+    private void showRenameInputDialog(Player player, String worldName) {
+        Component title = parseFormattedMessage("&7Welt-Name ändern");
+
+        TextDialogInput textInput = DialogInput.text("input", title)
+            .initial("")
+            .maxLength(32)
+            .build();
+
+        DialogActionCallback callback = (DialogResponseView view, net.kyori.adventure.audience.Audience audience) -> {
+            String input = view.getText("input");
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(player.getUniqueId());
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+                applyRename(online, worldName, input == null ? "" : input.trim());
+            });
+        };
+
+        ActionButton confirmButton = ActionButton.create(
+            Component.text("Bestätigen"),
+            Component.empty(),
+            150,
+            DialogAction.customClick(callback, ClickCallback.Options.builder().build())
+        );
+
+        DialogBase base = DialogBase.create(
+            title,
+            title,
+            true,
+            false,
+            DialogBase.DialogAfterAction.CLOSE,
+            List.of(),
+            List.of(textInput)
+        );
+
+        Dialog dialog = Dialog.create(factory -> factory.empty()
+            .base(base)
+            .type(DialogType.notice(confirmButton)));
+
+        player.showDialog(dialog);
     }
 
     private void handleIconCommand(Player player, String[] args) {
@@ -2371,8 +2680,15 @@ public final class GuiManager {
             send(player, "not-world-owner");
             return;
         }
-        repository.setDisplayName(worldName, newDisplayName);
+        if (!repository.setDisplayName(worldName, newDisplayName)) {
+            player.sendMessage("§cDer Anzeigename konnte nicht gespeichert werden.");
+            return;
+        }
+
         send(player, "rename-success", "%name%", newDisplayName);
+        if (player.isOnline()) {
+            openEditWorldGui(player, worldName);
+        }
     }
 
     private void applyIcon(Player player, String worldName, String input) {
@@ -2679,6 +2995,11 @@ public final class GuiManager {
         String targetServer = requestedServer != null && !requestedServer.isBlank()
             ? requestedServer.trim()
             : resolveTargetCreationServer();
+        if (isBlockedServerName(targetServer)) {
+            player.sendMessage("§cAuf diesem Server können keine neuen Welten erstellt werden: §f" + targetServer);
+            return;
+        }
+
         String localServer = resolveLocalServerId();
         boolean shouldCreateLocally = targetServer.isBlank()
             || localServer.isBlank()
@@ -2687,6 +3008,8 @@ public final class GuiManager {
         if (!shouldCreateLocally) {
             player.sendMessage("§7Die Welt wird auf einem anderen Online-Server erstellt.");
             player.sendMessage("§7Die Welt wird auf §f" + targetServer + " §7erstellt und du wirst dorthin verbunden.");
+            String creatingTitle = plugin.getConfig().getString("messages.with-prefix.create-creating-title", "Welt wird erstellt...");
+            player.sendTitle(ChatColor.translateAlternateColorCodes('&', creatingTitle), "", 10, 70, 10);
 
             persistWorldMetadataWithRetry(
                 player.getUniqueId(),
@@ -2706,7 +3029,6 @@ public final class GuiManager {
 
             if (notifyWhenVisible) {
                 player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst verbunden, sobald sie dort sichtbar ist.");
-                openGui(player, "my-worlds");
             }
             return;
         }
@@ -2725,6 +3047,10 @@ public final class GuiManager {
         ConsoleCommandSender console = Bukkit.getConsoleSender();
         Bukkit.dispatchCommand(console, "mv import " + worldName + " normal");
 
+        // Title sofort zeigen
+        String creatingTitle = plugin.getConfig().getString("messages.with-prefix.create-creating-title", "Welt wird erstellt...");
+        player.sendTitle(ChatColor.translateAlternateColorCodes('&', creatingTitle), "", 10, 70, 10);
+
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -2735,6 +3061,7 @@ public final class GuiManager {
                 }
 
                 applyConfiguredGameRules(world);
+                applyWorldGuardProtection(world, player.getUniqueId().toString(), player.getName(), List.of(), List.of());
 
                 setAnyGameRule(world, false, "spawn_mobs", "doMobSpawning");
                 setAnyGameRule(world, false, "advance_weather", "weather_cycle", "doWeatherCycle");
@@ -2780,7 +3107,10 @@ public final class GuiManager {
                 if (notifyWhenVisible) {
                     player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst teleportiert, sobald sie dort sichtbar ist.");
                     openGui(player, "my-worlds");
+                    return;
                 }
+
+                scheduleCreatedWorldJoin(player, worldName, targetServer, 100L, false);
             }
         }.runTaskLater(plugin, 20L);
     }
@@ -2859,6 +3189,98 @@ public final class GuiManager {
         world.setSpawnLocation(spawnX, spawnY, spawnZ);
     }
 
+    private void scheduleCreatedWorldJoin(Player player, String worldName, String targetServer, long delayTicks, boolean retryOnMissing) {
+        scheduleCreatedWorldJoin(player, worldName, targetServer, delayTicks, 5);
+    }
+
+    private void scheduleCreatedWorldJoin(Player player, String worldName, String targetServer, long delayTicks, int retriesLeft) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Player onlinePlayer = Bukkit.getPlayer(player.getUniqueId());
+            if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                return;
+            }
+
+            Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+            if (entryOpt.isEmpty()) {
+                if (retriesLeft > 0) {
+                    scheduleCreatedWorldJoin(onlinePlayer, worldName, targetServer, 20L, retriesLeft - 1);
+                    return;
+                }
+                onlinePlayer.sendMessage("§eDie Welt ist noch nicht bereit. Bitte versuche es gleich erneut.");
+                return;
+            }
+
+            WorldEntry entry = entryOpt.get();
+            if (isWorldOnThisServer(entry)) {
+                if (joinCreatedWorldWhenReady(onlinePlayer, entry, true)) {
+                    return;
+                }
+
+                if (retriesLeft > 0) {
+                    scheduleCreatedWorldJoin(onlinePlayer, worldName, targetServer, 20L, retriesLeft - 1);
+                    return;
+                }
+
+                onlinePlayer.sendMessage("§eDie Welt konnte auf diesem Server nicht rechtzeitig geladen werden: §f" + worldName);
+                return;
+            }
+
+            sendWithPrefix(onlinePlayer, "create-joining-world", "Betrete Welt...");
+            connectPlayerToWorldServer(onlinePlayer, entry);
+            onlinePlayer.sendMessage("§aDu wirst auf den Zielserver §f" + entry.serverName() + " §averbunden.");
+        }, delayTicks);
+    }
+
+    private void schedulePendingWorldTransferJoin(Player player, String worldName, long delayTicks, int retriesLeft) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Player onlinePlayer = Bukkit.getPlayer(player.getUniqueId());
+            if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                return;
+            }
+
+            Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+            if (entryOpt.isEmpty()) {
+                if (retriesLeft > 0) {
+                    schedulePendingWorldTransferJoin(onlinePlayer, worldName, 20L, retriesLeft - 1);
+                    return;
+                }
+                onlinePlayer.sendMessage("§cDie Zielwelt konnte nach dem Serverwechsel nicht geladen werden: §f" + worldName);
+                return;
+            }
+
+            if (joinCreatedWorldWhenReady(onlinePlayer, entryOpt.get(), true)) {
+                return;
+            }
+
+            if (retriesLeft > 0) {
+                schedulePendingWorldTransferJoin(onlinePlayer, worldName, 20L, retriesLeft - 1);
+                return;
+            }
+
+            onlinePlayer.sendMessage("§cDie Zielwelt konnte nach dem Serverwechsel nicht geladen werden: §f" + worldName);
+        }, delayTicks);
+    }
+
+    private boolean joinCreatedWorldWhenReady(Player player, WorldEntry entry, boolean notify) {
+        String worldName = entry.worldName();
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+            world = Bukkit.getWorld(worldName);
+        }
+        if (world == null) {
+            return false;
+        }
+
+        Location spawn = entry.toSpawnLocation(world).orElse(world.getSpawnLocation());
+        player.teleport(spawn);
+        applyPreferredGameMode(player, entry);
+        if (notify) {
+            send(player, "join-success", "%world%", worldName);
+        }
+        return true;
+    }
+
     private void persistWorldMetadataWithRetry(
         UUID playerId,
         String ownerName,
@@ -2899,9 +3321,7 @@ public final class GuiManager {
                         if (online != null && online.isOnline()) {
                             if (notifyWhenVisible) {
                                 online.sendMessage("§aDeine Welt §f" + worldName + " §aist jetzt im GUI sichtbar.");
-                                openGui(online, "my-worlds");
-                                joinWorld(online, worldName, false);
-                                online.sendMessage("§aDu wurdest automatisch zur neuen Welt bzw. auf den Zielserver verbunden.");
+                                scheduleCreatedWorldJoin(online, worldName, serverNameOverride, 100L, true);
                             }
                             if (wasRetry) {
                                 online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");
@@ -3023,6 +3443,24 @@ public final class GuiManager {
         });
     }
 
+    private void archiveWorld(Player player, String worldName) {
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+
+        repository.archiveWorld(worldName);
+        refreshWorldGuardProtection(worldName);
+        send(player, "archive-success", "%world%", worldName);
+    }
+
     private boolean isWorldReallyDeleted(String worldName) {
         if (Bukkit.getWorld(worldName) != null) {
             return false;
@@ -3125,10 +3563,7 @@ public final class GuiManager {
         }
 
         for (String trustedPlayer : trustedPlayers == null ? List.<String>of() : trustedPlayers) {
-            if (trustedPlayer == null || trustedPlayer.isBlank()) {
-                continue;
-            }
-            region.getMembers().addPlayer(trustedPlayer.trim());
+            addWorldGuardMember(region, trustedPlayer);
         }
 
         region.setFlag(Flags.BUILD, StateFlag.State.DENY);
@@ -3153,6 +3588,32 @@ public final class GuiManager {
         return Bukkit.getPluginManager().getPlugin("WorldGuard") != null;
     }
 
+    private void addWorldGuardMember(ProtectedRegion region, String playerName) {
+        if (region == null || playerName == null || playerName.isBlank()) {
+            return;
+        }
+
+        String normalized = playerName.trim();
+        Player online = Bukkit.getPlayerExact(normalized);
+        if (online != null) {
+            region.getMembers().addPlayer(online.getUniqueId());
+            region.getMembers().addPlayer(online.getName());
+            return;
+        }
+
+        OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(normalized);
+        if (cached != null && cached.getUniqueId() != null) {
+            region.getMembers().addPlayer(cached.getUniqueId());
+            String cachedName = cached.getName();
+            if (cachedName != null && !cachedName.isBlank()) {
+                region.getMembers().addPlayer(cachedName);
+            }
+            return;
+        }
+
+        region.getMembers().addPlayer(normalized);
+    }
+
     private void evacuatePlayersFromWorld(String worldName) {
         World target = Bukkit.getWorld(worldName);
         if (target == null) {
@@ -3171,6 +3632,33 @@ public final class GuiManager {
             affected.teleport(destination);
             affected.sendMessage("§eDiese Welt wurde gelöscht. Du wurdest in deine Welt §f" + ownFallback.getName() + " §eteleportiert.");
         }
+    }
+
+    private void forcePlayerOutOfWorldIfNeeded(String playerName, String worldName) {
+        if (playerName == null || playerName.isBlank() || worldName == null || worldName.isBlank()) {
+            return;
+        }
+
+        Player target = Bukkit.getPlayerExact(playerName);
+        if (target == null || !target.isOnline()) {
+            return;
+        }
+
+        World currentWorld = target.getWorld();
+        if (currentWorld == null || !currentWorld.getName().equalsIgnoreCase(worldName)) {
+            return;
+        }
+
+        World fallback = resolveOwnFallbackWorld(target, worldName);
+        if (fallback == null && !Bukkit.getWorlds().isEmpty()) {
+            fallback = Bukkit.getWorlds().get(0);
+        }
+        if (fallback == null) {
+            return;
+        }
+
+        target.teleport(fallback.getSpawnLocation());
+        target.sendMessage("§eDu wurdest aus der Welt §f" + worldName + " §eentfernt und in §f" + fallback.getName() + " §eteleportiert.");
     }
 
     private void setWorldPublic(Player player, String worldName, boolean isPublic, String permission) {
@@ -3373,10 +3861,7 @@ public final class GuiManager {
             "SIMPLECLOUD_SERVICE_NAME",
             "SIMPLECLOUD_SERVICE_ID",
             "CLOUDNET_SERVICE_ID",
-            "CLOUDNET_SERVICE_NAME",
-            "SERVICE_NAME",
-            "SERVER_NAME",
-            "HOSTNAME"
+            "CLOUDNET_SERVICE_NAME"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
@@ -3421,12 +3906,29 @@ public final class GuiManager {
         return out;
     }
 
+    private boolean isBlockedServerName(String serverId) {
+        if (serverId == null || serverId.isBlank()) {
+            return false;
+        }
+        List<String> blockedServers = resolveConfiguredBlockedServerNames();
+        return blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, serverId));
+    }
+
     private List<String> resolveSelectableServerNames() {
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
+        String localServer = resolveLocalServerId();
+
+        boolean localBlocked = !localServer.isBlank()
+            && blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, localServer));
 
         List<String> apiOnline = repository.listOnlineServerNames(20);
         if (!apiOnline.isEmpty()) {
-            List<String> allOnline = new ArrayList<>(new LinkedHashSet<>(apiOnline));
+            LinkedHashSet<String> merged = new LinkedHashSet<>(apiOnline);
+            if (!localServer.isBlank() && !localBlocked) {
+                merged.add(localServer);
+            }
+
+            List<String> allOnline = new ArrayList<>(merged);
             allOnline.sort(String.CASE_INSENSITIVE_ORDER);
 
             if (blockedServers.isEmpty()) {
@@ -3448,8 +3950,12 @@ public final class GuiManager {
         Optional<Set<String>> onlineIdentifiersOpt = fetchOnlineServerIdentifiers();
 
         if (onlineIdentifiersOpt.isPresent()) {
-            Set<String> onlineIdentifiers = onlineIdentifiersOpt.get();
-            List<String> allOnline = new ArrayList<>(onlineIdentifiers);
+            LinkedHashSet<String> merged = new LinkedHashSet<>(onlineIdentifiersOpt.get());
+            if (!localServer.isBlank() && !localBlocked) {
+                merged.add(localServer);
+            }
+
+            List<String> allOnline = new ArrayList<>(merged);
             allOnline.sort(String.CASE_INSENSITIVE_ORDER);
 
             if (!allOnline.isEmpty() && blockedServers.isEmpty()) {
@@ -3490,7 +3996,8 @@ public final class GuiManager {
         }
 
         String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
-        for (String path : List.of("/v0/services", "/v0/servers")) {
+        // Prefer the dedicated servers endpoint first (works more reliably on platform controller).
+        for (String path : List.of("/v0/servers?sort_order=asc", "/v0/servers", "/v0/services")) {
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(normalizedController + path))
@@ -3604,11 +4111,14 @@ public final class GuiManager {
         String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
         String playerId = URLEncoder.encode(player.getUniqueId().toString(), StandardCharsets.UTF_8);
         String endpoint = normalizedController + "/v0/players/connect?player_id=" + playerId;
-        String payload = "{\"server_id\":\"" + targetServer + "\"}";
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            repository.upsertPendingWorldTransfer(player.getName(), entry.worldName());
+
             String message;
             boolean alreadyConnected = false;
+            String effectiveTargetServer = resolveEffectiveConnectTargetServer(targetServer);
+            String payload = "{\"server_id\":\"" + effectiveTargetServer + "\"}";
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(endpoint))
@@ -3622,8 +4132,13 @@ public final class GuiManager {
                 HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
                 String body = response.body() == null ? "" : response.body();
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "success")) {
-                    message = "§aDu wirst auf §f" + targetServer + " §averbunden ...";
+                    if (!effectiveTargetServer.equalsIgnoreCase(targetServer)) {
+                        message = "§eZielserver §f" + targetServer + " §eist offline. Verbinde stattdessen zu §f" + effectiveTargetServer + "§e ...";
+                    } else {
+                        message = "§aDu wirst auf §f" + effectiveTargetServer + " §averbunden ...";
+                    }
                 } else {
+                    repository.upsertPendingWorldTransfer(player.getName(), null);
                     String detail = extractJsonString(body, "message");
                     if (detail == null || detail.isBlank()) {
                         detail = extractJsonString(body, "error");
@@ -3641,6 +4156,7 @@ public final class GuiManager {
                     }
                 }
             } catch (Exception ex) {
+                repository.upsertPendingWorldTransfer(player.getName(), null);
                 message = "§cServer-Wechsel fehlgeschlagen: §f" + ex.getMessage();
             }
 
@@ -3655,6 +4171,47 @@ public final class GuiManager {
                 }
             });
         });
+    }
+
+    private String resolveEffectiveConnectTargetServer(String requestedServer) {
+        String normalizedRequested = normalizeServerIdentifier(requestedServer);
+        if (normalizedRequested.isBlank()) {
+            return requestedServer;
+        }
+
+        List<String> onlineServers = repository.listOnlineServerNames(20);
+        if (onlineServers.isEmpty()) {
+            return requestedServer;
+        }
+
+        for (String online : onlineServers) {
+            if (online != null && online.equalsIgnoreCase(normalizedRequested)) {
+                return online;
+            }
+        }
+
+        String requestedBase = stripInstanceSuffix(normalizedRequested);
+        if (requestedBase.isBlank()) {
+            return requestedServer;
+        }
+
+        List<String> siblings = new ArrayList<>();
+        for (String online : onlineServers) {
+            if (online == null || online.isBlank()) {
+                continue;
+            }
+            String onlineBase = stripInstanceSuffix(normalizeServerIdentifier(online));
+            if (!onlineBase.isBlank() && onlineBase.equalsIgnoreCase(requestedBase)) {
+                siblings.add(online);
+            }
+        }
+
+        if (siblings.isEmpty()) {
+            return requestedServer;
+        }
+
+        siblings.sort(String.CASE_INSENSITIVE_ORDER);
+        return siblings.get(0);
     }
 
     private void applyPreferredGameMode(Player player, WorldEntry entry) {
@@ -3818,20 +4375,132 @@ public final class GuiManager {
         return false;
     }
 
+    public void sendWithPrefix(org.bukkit.command.CommandSender sender, String key, String fallbackLiteral, String... replacements) {
+        sendConfigured(sender, true, key, fallbackLiteral, replacements);
+    }
+
+    public void sendNoPrefixConfigured(org.bukkit.command.CommandSender sender, String key, String fallbackLiteral, String... replacements) {
+        sendConfigured(sender, false, key, fallbackLiteral, replacements);
+    }
+
     private void send(Player player, String key, String... replacements) {
-        String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
-        for (String line : readMessageLines("messages." + key, key, replacements)) {
-            String full = prefixTemplate.replace("%messages%", line);
-            player.sendMessage(parseFormattedMessage(full));
-        }
+        sendConfigured(player, true, key, key, replacements);
     }
 
     private void sendNoPrefix(Player player, String key, String... replacements) {
-        String noPrefixPath = "messages.no-prefix." + key;
-        String fallbackPath = "messages." + key;
-        for (String line : readMessageLines(noPrefixPath, fallbackPath, key, replacements)) {
-            player.sendMessage(parseFormattedMessage(line));
+        sendConfigured(player, false, key, key, replacements);
+    }
+
+    private boolean isChatFeedbackSuppressed(Player player) {
+        return player != null && suppressedChatFeedbackPlayers.contains(player.getUniqueId());
+    }
+
+    private void sendPlain(Player player, String message) {
+        // chat-feedback=false should hide success output, but still show errors/warnings.
+        if (isChatFeedbackSuppressed(player) && message != null && message.startsWith("§a")) {
+            return;
         }
+        player.sendMessage(message);
+    }
+
+    private void sendConfigured(org.bukkit.command.CommandSender sender, boolean defaultWithPrefix, String key, String fallbackLiteral, String... replacements) {
+        if (sender == null) {
+            return;
+        }
+
+        MessageStyle style = resolveMessageStyle(key, defaultWithPrefix);
+        List<String> lines = readConfiguredMessageLines(key, style, fallbackLiteral, replacements);
+        String prefixTemplate = plugin.getConfig().getString("messages.prefix", "&3WorldsGUI &8» &7%messages%");
+
+        for (String line : lines) {
+            String output = style.withPrefix
+                ? prefixTemplate.replace("%messages%", line)
+                : line;
+            sender.sendMessage(parseFormattedMessage(output));
+        }
+    }
+
+    private MessageStyle resolveMessageStyle(String key, boolean defaultWithPrefix) {
+        String withPrefixPath = "messages.with-prefix." + key;
+        String noPrefixPath = "messages.no-prefix." + key;
+        boolean hasWithPrefix = hasMessagePath(withPrefixPath);
+        boolean hasNoPrefix = hasMessagePath(noPrefixPath);
+
+        if (hasWithPrefix && !hasNoPrefix) {
+            return MessageStyle.WITH_PREFIX;
+        }
+        if (hasNoPrefix && !hasWithPrefix) {
+            return MessageStyle.NO_PREFIX;
+        }
+        return defaultWithPrefix ? MessageStyle.WITH_PREFIX : MessageStyle.NO_PREFIX;
+    }
+
+    private boolean hasMessagePath(String path) {
+        Object value = plugin.getConfig().get(path);
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof String text) {
+            return !text.isBlank();
+        }
+        if (value instanceof List<?> list) {
+            return !list.isEmpty();
+        }
+        return true;
+    }
+
+    private List<String> readConfiguredMessageLines(String key, MessageStyle style, String fallbackLiteral, String... replacements) {
+        List<String> lines = new ArrayList<>();
+
+        if (style.withPrefix) {
+            lines = readMessageLinesFromPath("messages.with-prefix." + key);
+            if (lines.isEmpty()) {
+                lines = readMessageLinesFromPath("messages." + key);
+            }
+        } else {
+            lines = readMessageLinesFromPath("messages.no-prefix." + key);
+            if (lines.isEmpty()) {
+                lines = readMessageLinesFromPath("messages." + key);
+            }
+        }
+
+        if (lines.isEmpty()) {
+            lines.add(fallbackLiteral == null || fallbackLiteral.isBlank() ? key : fallbackLiteral);
+        }
+
+        return applyMessageReplacements(lines, replacements);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> readMessageLinesFromPath(String path) {
+        Object value = plugin.getConfig().get(path);
+        List<String> lines = new ArrayList<>();
+
+        if (value instanceof List<?> listValue) {
+            for (Object raw : listValue) {
+                if (raw != null) {
+                    lines.add(raw.toString());
+                }
+            }
+            return lines;
+        }
+
+        if (value instanceof String text && !text.isBlank()) {
+            lines.add(text);
+        }
+        return lines;
+    }
+
+    private List<String> applyMessageReplacements(List<String> lines, String... replacements) {
+        List<String> out = new ArrayList<>(lines.size());
+        for (String line : lines) {
+            String formatted = line;
+            for (int i = 0; i + 1 < replacements.length; i += 2) {
+                formatted = formatted.replace(replacements[i], replacements[i + 1]);
+            }
+            out.add(formatted);
+        }
+        return out;
     }
 
     private List<String> readMessageLines(String path, String fallbackKey, String... replacements) {
@@ -3869,6 +4538,17 @@ public final class GuiManager {
             out.add(formatted);
         }
         return out;
+    }
+
+    private enum MessageStyle {
+        WITH_PREFIX(true),
+        NO_PREFIX(false);
+
+        private final boolean withPrefix;
+
+        MessageStyle(boolean withPrefix) {
+            this.withPrefix = withPrefix;
+        }
     }
 
     private Component parseFormattedMessage(String input) {
@@ -4086,7 +4766,7 @@ public final class GuiManager {
         openEditWorldGui(player, holder.worldName());
     }
 
-    private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs) {
+    private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs, boolean archiveOnly) {
     }
 
     private record PendingTicketWorld(String worldName, List<String> customers, boolean archived) {

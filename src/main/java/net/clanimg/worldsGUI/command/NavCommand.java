@@ -27,7 +27,7 @@ public final class NavCommand implements TabExecutor {
                 guiManager.executeNavStatus(sender, worldName);
                 return true;
             }
-            sender.sendMessage("Dieser Befehl ist nur für Spieler (außer /nav status).");
+            guiManager.sendWithPrefix(sender, "command.nav.only-player", "Dieser Befehl ist nur für Spieler (außer /nav status).", "%label%", label);
             return true;
         }
 
@@ -40,7 +40,7 @@ public final class NavCommand implements TabExecutor {
         switch (sub) {
             case "create" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav create <ticketId>  ODER  /nav create <world-type> <server-id>");
+                    guiManager.sendWithPrefix(player, "usage.nav.create", "Usage: /nav create <ticketId>  ODER  /nav create <world-type> <server-id>", "%label%", label);
                     return true;
                 }
                 if (args.length >= 3) {
@@ -52,7 +52,7 @@ public final class NavCommand implements TabExecutor {
             }
             case "delete" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav delete <world>");
+                    guiManager.sendWithPrefix(player, "usage.nav.delete", "Usage: /nav delete <world>", "%label%", label);
                     return true;
                 }
                 guiManager.executeNavDelete(player, args[1]);
@@ -60,27 +60,27 @@ public final class NavCommand implements TabExecutor {
             }
             case "join" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav join <enable|disable> <ticketId>");
+                    guiManager.sendWithPrefix(player, "usage.nav.join", "Usage: /nav join <enable|disable> <ticketId>", "%label%", label);
                     return true;
                 }
                 String joinSub = args[1].toLowerCase(Locale.ROOT);
                 switch (joinSub) {
                     case "enable" -> guiManager.executeNavJoinEnable(player, args[2]);
                     case "disable" -> guiManager.executeNavJoinDisable(player, args[2]);
-                    default -> player.sendMessage("Usage: /nav join <enable|disable> <ticketId>");
+                    default -> guiManager.sendWithPrefix(player, "usage.nav.join", "Usage: /nav join <enable|disable> <ticketId>", "%label%", label);
                 }
                 return true;
             }
             case "my-world", "my-worlds" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...");
+                    guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...", "%label%", label);
                     return true;
                 }
                 String myWorldSub = args[1].toLowerCase(Locale.ROOT);
                 switch (myWorldSub) {
                     case "create" -> {
                         if (args.length < 3) {
-                            player.sendMessage("Usage: /nav my-world create <new-name>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.create", "Usage: /nav my-world create <new-name>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldCreate(player, args[2]);
@@ -88,7 +88,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "delete" -> {
                         if (args.length < 4 || !args[3].equalsIgnoreCase("confirm")) {
-                            player.sendMessage("Usage: /nav my-world delete <world-name> confirm");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.delete", "Usage: /nav my-world delete <world-name> confirm", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldDelete(player, args[2], true);
@@ -96,7 +96,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "open" -> {
                         if (args.length < 3) {
-                            player.sendMessage("Usage: /nav my-world open <world-name>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.open", "Usage: /nav my-world open <world-name>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldOpen(player, args[2]);
@@ -104,7 +104,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "closed" -> {
                         if (args.length < 3) {
-                            player.sendMessage("Usage: /nav my-world closed <world-name>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.closed", "Usage: /nav my-world closed <world-name>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldClosed(player, args[2]);
@@ -112,7 +112,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "trust" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-worlds trust <world-name> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-worlds.trust", "Usage: /nav my-worlds trust <world-name> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldTrust(player, args[2], args[3]);
@@ -120,7 +120,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "untrust" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-worlds untrust <world-name> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-worlds.untrust", "Usage: /nav my-worlds untrust <world-name> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldUntrust(player, args[2], args[3]);
@@ -128,7 +128,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "invite" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-worlds invite <world-name> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-worlds.invite", "Usage: /nav my-worlds invite <world-name> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldInvite(player, args[2], args[3]);
@@ -136,7 +136,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "remove" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-worlds remove <world-name> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-worlds.remove", "Usage: /nav my-worlds remove <world-name> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldRemove(player, args[2], args[3]);
@@ -144,7 +144,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "rename" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world rename <world-name> <new-name>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.rename", "Usage: /nav my-world rename <world-name> <new-name>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldRename(player, args[2], slice(args, 3));
@@ -152,7 +152,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "icon" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world icon <world-name> <material>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.icon", "Usage: /nav my-world icon <world-name> <material>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldIcon(player, args[2], new String[] { args[3] });
@@ -160,7 +160,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "clone" -> {
                         if (args.length < 3) {
-                            player.sendMessage("Usage: /nav my-world clone <world-name> [player]");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.clone", "Usage: /nav my-world clone <world-name> [player]", "%label%", label);
                             return true;
                         }
                         String targetPlayer = args.length >= 4 ? args[3] : null;
@@ -169,21 +169,21 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "import" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav my-world import <world-name> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.import", "Usage: /nav my-world import <world-name> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavMyWorldImport(player, args[2], args[3]);
                         return true;
                     }
                     default -> {
-                        player.sendMessage("Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...");
+                        guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...", "%label%", label);
                         return true;
                     }
                 }
             }
             case "confirm" -> {
                 if (args.length < 2) {
-                    player.sendMessage("Usage: /nav confirm <code>");
+                    guiManager.sendWithPrefix(player, "usage.nav.confirm", "Usage: /nav confirm <code>", "%label%", label);
                     return true;
                 }
                 guiManager.executeNavConfirm(player, args[1]);
@@ -191,14 +191,14 @@ public final class NavCommand implements TabExecutor {
             }
             case "customer" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
+                    guiManager.sendWithPrefix(player, "usage.nav.customer", "Usage: /nav customer <invite|remove|trust|untrust> ...", "%label%", label);
                     return true;
                 }
                 String customerSub = args[1].toLowerCase(Locale.ROOT);
                 switch (customerSub) {
                     case "invite" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav customer invite <world> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.customer.invite", "Usage: /nav customer invite <world> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavCustomerInvite(player, args[2], args[3]);
@@ -206,7 +206,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "remove" -> {
                         if (args.length < 4) {
-                            player.sendMessage("Usage: /nav customer remove <world> <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.customer.remove", "Usage: /nav customer remove <world> <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavCustomerRemove(player, args[2], args[3]);
@@ -214,7 +214,7 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "trust" -> {
                         if (args.length < 3) {
-                            player.sendMessage("Usage: /nav customer trust <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.customer.trust", "Usage: /nav customer trust <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavCustomerTrust(player, args[2]);
@@ -222,14 +222,14 @@ public final class NavCommand implements TabExecutor {
                     }
                     case "untrust" -> {
                         if (args.length < 3) {
-                            player.sendMessage("Usage: /nav customer untrust <player>");
+                            guiManager.sendWithPrefix(player, "usage.nav.customer.untrust", "Usage: /nav customer untrust <player>", "%label%", label);
                             return true;
                         }
                         guiManager.executeNavCustomerUntrust(player, args[2]);
                         return true;
                     }
                     default -> {
-                        player.sendMessage("Usage: /nav customer <invite|remove|trust|untrust> ...");
+                        guiManager.sendWithPrefix(player, "usage.nav.customer", "Usage: /nav customer <invite|remove|trust|untrust> ...", "%label%", label);
                         return true;
                     }
                 }
@@ -246,7 +246,7 @@ public final class NavCommand implements TabExecutor {
             }
             case "rename" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav rename <world> <name>");
+                    guiManager.sendWithPrefix(player, "usage.nav.rename", "Usage: /nav rename <world> <name>", "%label%", label);
                     return true;
                 }
                 String worldName = args[1];
@@ -256,7 +256,7 @@ public final class NavCommand implements TabExecutor {
             }
             case "icon" -> {
                 if (args.length < 3) {
-                    player.sendMessage("Usage: /nav icon <world> <material>");
+                    guiManager.sendWithPrefix(player, "usage.nav.icon", "Usage: /nav icon <world> <material>", "%label%", label);
                     return true;
                 }
                 String worldName = args[1];

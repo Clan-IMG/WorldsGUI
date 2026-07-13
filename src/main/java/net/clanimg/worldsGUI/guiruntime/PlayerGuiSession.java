@@ -36,6 +36,12 @@ public final class PlayerGuiSession {
         }
     }
 
+    public void clearParam(String key) {
+        if (key != null && !key.isBlank()) {
+            params.remove(key);
+        }
+    }
+
     public String param(String key) {
         return key == null ? null : params.get(key);
     }

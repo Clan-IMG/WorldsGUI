@@ -56,8 +56,10 @@ public final class TriggerDispatcher {
             return;
         }
 
-        player.closeInventory();
-        commandDispatcher.dispatch(player, expanded);
+        if (trigger.chatFeedback()) {
+            player.closeInventory();
+        }
+        commandDispatcher.dispatch(player, expanded, trigger.chatFeedback());
     }
 
     private void executeOpenGui(Player player, PlayerGuiSession session, GuiTrigger trigger, Map<String, String> extra) {
@@ -72,6 +74,9 @@ public final class TriggerDispatcher {
     }
 
     private void executeReturn(Player player, PlayerGuiSession session) {
+        if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
+            session.clearParam("search");
+        }
         String previous = session.popHistory();
         if (previous == null) {
             player.closeInventory();
@@ -123,7 +128,7 @@ public final class TriggerDispatcher {
             return;
         }
 
-        commandDispatcher.dispatch(player, expanded);
+        commandDispatcher.dispatch(player, expanded, state.chatFeedback());
 
         String next = state.next();
         if (next == null || next.isBlank() || !trigger.toggleStates().containsKey(next)) {
