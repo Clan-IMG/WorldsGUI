@@ -75,6 +75,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.GameRule;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -2064,9 +2065,13 @@ public final class GuiManager {
         if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
             session.clearParam("search");
             String previousGuiId = session.popHistory();
-            if (previousGuiId != null && !previousGuiId.isBlank()) {
-                session.setCurrentGuiId(previousGuiId);
-                openGui(player, previousGuiId);
+            String previousPreviousGuiId = session.popHistory();
+            String targetGuiId = previousPreviousGuiId != null && !previousPreviousGuiId.isBlank()
+                ? previousPreviousGuiId
+                : previousGuiId;
+            if (targetGuiId != null && !targetGuiId.isBlank()) {
+                session.setCurrentGuiId(targetGuiId);
+                openGui(player, targetGuiId);
             }
         }
     }
@@ -2259,14 +2264,8 @@ public final class GuiManager {
                 }
 
                 if (pendingWorldName != null && !pendingWorldName.isBlank()) {
-                    Optional<WorldEntry> pendingEntry = repository.findByWorldName(pendingWorldName);
-                    if (pendingEntry.isPresent()) {
-                        if (joinWorldLocally(online, pendingEntry.get(), true)) {
-                            return;
-                        }
-                        online.sendMessage("§cDie Zielwelt konnte auf diesem Server nicht geladen werden: §f" + pendingWorldName);
-                        return;
-                    }
+                    schedulePendingWorldTransferJoin(online, pendingWorldName, 20L, 10);
+                    return;
                 }
 
                 ensurePersonalFlatWorldForJoin(online);
@@ -3009,6 +3008,8 @@ public final class GuiManager {
         if (!shouldCreateLocally) {
             player.sendMessage("§7Die Welt wird auf einem anderen Online-Server erstellt.");
             player.sendMessage("§7Die Welt wird auf §f" + targetServer + " §7erstellt und du wirst dorthin verbunden.");
+            String creatingTitle = plugin.getConfig().getString("messages.with-prefix.create-creating-title", "Welt wird erstellt...");
+            player.sendTitle(ChatColor.translateAlternateColorCodes('&', creatingTitle), "", 10, 70, 10);
 
             persistWorldMetadataWithRetry(
                 player.getUniqueId(),
@@ -3028,7 +3029,6 @@ public final class GuiManager {
 
             if (notifyWhenVisible) {
                 player.sendMessage("§7Die Welt wird jetzt im Dashboard eingetragen. Du wirst verbunden, sobald sie dort sichtbar ist.");
-                openGui(player, "my-worlds");
             }
             return;
         }
@@ -3049,7 +3049,7 @@ public final class GuiManager {
 
         // Title sofort zeigen
         String creatingTitle = plugin.getConfig().getString("messages.with-prefix.create-creating-title", "Welt wird erstellt...");
-        player.sendTitle(creatingTitle, "", 10, 70, 10);
+        player.sendTitle(ChatColor.translateAlternateColorCodes('&', creatingTitle), "", 10, 70, 10);
 
         new BukkitRunnable() {
             @Override
@@ -3110,18 +3110,7 @@ public final class GuiManager {
                     return;
                 }
 
-                // Nach erfolgreicher Erstellung: Mit Verzögerung teleportieren
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        Player onlinePlayer = Bukkit.getPlayer(player.getUniqueId());
-                        if (onlinePlayer == null || !onlinePlayer.isOnline()) {
-                            return;
-                        }
-                        sendWithPrefix(onlinePlayer, "create-joining-world", "Betrete Welt...");
-                        joinWorld(onlinePlayer, worldName, false);
-                    }
-                }.runTaskLater(plugin, 100L); // 5 Sekunden Verzögerung
+                scheduleCreatedWorldJoin(player, worldName, targetServer, 100L, false);
             }
         }.runTaskLater(plugin, 20L);
     }
@@ -3200,6 +3189,98 @@ public final class GuiManager {
         world.setSpawnLocation(spawnX, spawnY, spawnZ);
     }
 
+    private void scheduleCreatedWorldJoin(Player player, String worldName, String targetServer, long delayTicks, boolean retryOnMissing) {
+        scheduleCreatedWorldJoin(player, worldName, targetServer, delayTicks, 5);
+    }
+
+    private void scheduleCreatedWorldJoin(Player player, String worldName, String targetServer, long delayTicks, int retriesLeft) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Player onlinePlayer = Bukkit.getPlayer(player.getUniqueId());
+            if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                return;
+            }
+
+            Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+            if (entryOpt.isEmpty()) {
+                if (retriesLeft > 0) {
+                    scheduleCreatedWorldJoin(onlinePlayer, worldName, targetServer, 20L, retriesLeft - 1);
+                    return;
+                }
+                onlinePlayer.sendMessage("§eDie Welt ist noch nicht bereit. Bitte versuche es gleich erneut.");
+                return;
+            }
+
+            WorldEntry entry = entryOpt.get();
+            if (isWorldOnThisServer(entry)) {
+                if (joinCreatedWorldWhenReady(onlinePlayer, entry, true)) {
+                    return;
+                }
+
+                if (retriesLeft > 0) {
+                    scheduleCreatedWorldJoin(onlinePlayer, worldName, targetServer, 20L, retriesLeft - 1);
+                    return;
+                }
+
+                onlinePlayer.sendMessage("§eDie Welt konnte auf diesem Server nicht rechtzeitig geladen werden: §f" + worldName);
+                return;
+            }
+
+            sendWithPrefix(onlinePlayer, "create-joining-world", "Betrete Welt...");
+            connectPlayerToWorldServer(onlinePlayer, entry);
+            onlinePlayer.sendMessage("§aDu wirst auf den Zielserver §f" + entry.serverName() + " §averbunden.");
+        }, delayTicks);
+    }
+
+    private void schedulePendingWorldTransferJoin(Player player, String worldName, long delayTicks, int retriesLeft) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Player onlinePlayer = Bukkit.getPlayer(player.getUniqueId());
+            if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                return;
+            }
+
+            Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+            if (entryOpt.isEmpty()) {
+                if (retriesLeft > 0) {
+                    schedulePendingWorldTransferJoin(onlinePlayer, worldName, 20L, retriesLeft - 1);
+                    return;
+                }
+                onlinePlayer.sendMessage("§cDie Zielwelt konnte nach dem Serverwechsel nicht geladen werden: §f" + worldName);
+                return;
+            }
+
+            if (joinCreatedWorldWhenReady(onlinePlayer, entryOpt.get(), true)) {
+                return;
+            }
+
+            if (retriesLeft > 0) {
+                schedulePendingWorldTransferJoin(onlinePlayer, worldName, 20L, retriesLeft - 1);
+                return;
+            }
+
+            onlinePlayer.sendMessage("§cDie Zielwelt konnte nach dem Serverwechsel nicht geladen werden: §f" + worldName);
+        }, delayTicks);
+    }
+
+    private boolean joinCreatedWorldWhenReady(Player player, WorldEntry entry, boolean notify) {
+        String worldName = entry.worldName();
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+            world = Bukkit.getWorld(worldName);
+        }
+        if (world == null) {
+            return false;
+        }
+
+        Location spawn = entry.toSpawnLocation(world).orElse(world.getSpawnLocation());
+        player.teleport(spawn);
+        applyPreferredGameMode(player, entry);
+        if (notify) {
+            send(player, "join-success", "%world%", worldName);
+        }
+        return true;
+    }
+
     private void persistWorldMetadataWithRetry(
         UUID playerId,
         String ownerName,
@@ -3240,18 +3321,7 @@ public final class GuiManager {
                         if (online != null && online.isOnline()) {
                             if (notifyWhenVisible) {
                                 online.sendMessage("§aDeine Welt §f" + worldName + " §aist jetzt im GUI sichtbar.");
-                                openGui(online, "my-worlds");
-
-                                // Mindestwartezeit vor automatischem Join: 5 Sekunden.
-                                Bukkit.getScheduler().runTaskLater(plugin, () -> {
-                                    Player delayedOnline = Bukkit.getPlayer(playerId);
-                                    if (delayedOnline == null || !delayedOnline.isOnline()) {
-                                        return;
-                                    }
-                                    sendWithPrefix(delayedOnline, "create-joining-world", "Betrete Welt...");
-                                    joinWorld(delayedOnline, worldName, false);
-                                    delayedOnline.sendMessage("§aDu wurdest automatisch zur neuen Welt bzw. auf den Zielserver verbunden.");
-                                }, 100L);
+                                scheduleCreatedWorldJoin(online, worldName, serverNameOverride, 100L, true);
                             }
                             if (wasRetry) {
                                 online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");
