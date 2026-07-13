@@ -3,6 +3,7 @@ package net.clanimg.worldsGUI.gui;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -13,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
@@ -3106,17 +3108,8 @@ public final class GuiManager {
                         if (onlinePlayer == null || !onlinePlayer.isOnline()) {
                             return;
                         }
-
-                        World loadedWorld = Bukkit.getWorld(worldName);
-                        if (loadedWorld == null) {
-                            sendWithPrefix(player, "create-failed", "Welt konnte nicht erstellt werden.", "%world%", worldName);
-                            return;
-                        }
-
                         sendWithPrefix(onlinePlayer, "create-joining-world", "Betrete Welt...");
-                        Location spawn = loadedWorld.getSpawnLocation();
-                        onlinePlayer.teleport(spawn);
-                        applyPreferredGameMode(onlinePlayer, null);
+                        joinWorld(onlinePlayer, worldName, false);
                     }
                 }.runTaskLater(plugin, 100L); // 5 Sekunden Verzögerung
             }
@@ -3238,8 +3231,17 @@ public final class GuiManager {
                             if (notifyWhenVisible) {
                                 online.sendMessage("§aDeine Welt §f" + worldName + " §aist jetzt im GUI sichtbar.");
                                 openGui(online, "my-worlds");
-                                joinWorld(online, worldName, false);
-                                online.sendMessage("§aDu wurdest automatisch zur neuen Welt bzw. auf den Zielserver verbunden.");
+
+                                // Mindestwartezeit vor automatischem Join: 5 Sekunden.
+                                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                                    Player delayedOnline = Bukkit.getPlayer(playerId);
+                                    if (delayedOnline == null || !delayedOnline.isOnline()) {
+                                        return;
+                                    }
+                                    sendWithPrefix(delayedOnline, "create-joining-world", "Betrete Welt...");
+                                    joinWorld(delayedOnline, worldName, false);
+                                    delayedOnline.sendMessage("§aDu wurdest automatisch zur neuen Welt bzw. auf den Zielserver verbunden.");
+                                }, 100L);
                             }
                             if (wasRetry) {
                                 online.sendMessage("§aWelt wurde jetzt mit dem Dashboard synchronisiert.");

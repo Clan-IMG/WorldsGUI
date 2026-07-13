@@ -445,10 +445,8 @@ guis:
         material: "ANVIL"
         title: "Spieler suchen"
         action:
-          trigger: "dialog-input"
-          dialog-title: "Spielername eingeben"
+          trigger: "open-gui"
           gui-id: "select-friend"
-          param-key: "search"
       slot-range:
         from: 0
         to: 44
