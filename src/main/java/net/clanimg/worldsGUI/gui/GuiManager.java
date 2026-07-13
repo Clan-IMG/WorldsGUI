@@ -3397,15 +3397,7 @@ public final class GuiManager {
 
         player.sendMessage("§7Lösche Welt §f" + worldName + "§7 ...");
 
-        for (Player online : Bukkit.getOnlinePlayers()) {
-            if (online.getWorld().getName().equalsIgnoreCase(worldName)) {
-                World fallback = Bukkit.getWorlds().isEmpty() ? null : Bukkit.getWorlds().get(0);
-                if (fallback != null) {
-                    online.teleport(fallback.getSpawnLocation());
-                    online.sendMessage("§eDie Welt §f" + worldName + " §ewird gelöscht. Du wurdest teleportiert.");
-                }
-            }
-        }
+        evacuatePlayersFromWorld(worldName);
 
         removeWorldGuardProtection(worldName);
 
@@ -3622,9 +3614,9 @@ public final class GuiManager {
 
         List<Player> affectedPlayers = new ArrayList<>(target.getPlayers());
         for (Player affected : affectedPlayers) {
-            World ownFallback = resolveOwnFallbackWorld(affected, worldName);
+            World ownFallback = resolveNextOwnWorld(affected, worldName);
             if (ownFallback == null) {
-                affected.kickPlayer("Diese Welt wurde gelöscht.");
+                sendPlayerToLobby(affected, worldName);
                 continue;
             }
 
@@ -3649,16 +3641,88 @@ public final class GuiManager {
             return;
         }
 
-        World fallback = resolveOwnFallbackWorld(target, worldName);
-        if (fallback == null && !Bukkit.getWorlds().isEmpty()) {
-            fallback = Bukkit.getWorlds().get(0);
-        }
+        World fallback = resolveNextOwnWorld(target, worldName);
         if (fallback == null) {
+            sendPlayerToLobby(target, worldName);
             return;
         }
 
         target.teleport(fallback.getSpawnLocation());
         target.sendMessage("§eDu wurdest aus der Welt §f" + worldName + " §eentfernt und in §f" + fallback.getName() + " §eteleportiert.");
+    }
+
+    private World resolveNextOwnWorld(Player player, String deletingWorldName) {
+        List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
+        for (WorldEntry entry : ownWorlds) {
+            if (entry.worldName().equalsIgnoreCase(deletingWorldName)) {
+                continue;
+            }
+
+            World candidate = Bukkit.getWorld(entry.worldName());
+            if (candidate == null) {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + entry.worldName());
+                candidate = Bukkit.getWorld(entry.worldName());
+            }
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void sendPlayerToLobby(Player player, String deletingWorldName) {
+        String lobbyServer = resolveLobbyServerId();
+        if (lobbyServer == null || lobbyServer.isBlank()) {
+            player.kickPlayer("Diese Welt wurde gelöscht.");
+            return;
+        }
+
+        String controllerUrl = plugin.getConfig().getString("simplecloud.controller-url", "");
+        String networkId = plugin.getConfig().getString("simplecloud.network-id", "");
+        String networkSecret = plugin.getConfig().getString("simplecloud.network-secret", "");
+        if (controllerUrl == null || controllerUrl.isBlank() || networkId == null || networkId.isBlank() || networkSecret == null || networkSecret.isBlank()) {
+            player.kickPlayer("Diese Welt wurde gelöscht.");
+            return;
+        }
+
+        String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
+        String playerId = URLEncoder.encode(player.getUniqueId().toString(), StandardCharsets.UTF_8);
+        String endpoint = normalizedController + "/v0/players/connect?player_id=" + playerId;
+        String payload = "{\"server_id\":\"" + lobbyServer + "\"}";
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(endpoint))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "*/*")
+                    .header("X-Network-ID", networkId)
+                    .header("X-Network-Secret", networkSecret)
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
+                    .build();
+
+                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    Player online = Bukkit.getPlayer(player.getUniqueId());
+                    if (online == null || !online.isOnline()) {
+                        return;
+                    }
+
+                    if (response.statusCode() / 100 == 2) {
+                        online.sendMessage("§eDie Welt §f" + deletingWorldName + " §ewird gelöscht. Du wirst zur Lobby verbunden ...");
+                    } else {
+                        online.kickPlayer("Diese Welt wurde gelöscht.");
+                    }
+                });
+            } catch (Exception ex) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    Player online = Bukkit.getPlayer(player.getUniqueId());
+                    if (online != null && online.isOnline()) {
+                        online.kickPlayer("Diese Welt wurde gelöscht.");
+                    }
+                });
+            }
+        });
     }
 
     private void setWorldPublic(Player player, String worldName, boolean isPublic, String permission) {
@@ -4212,6 +4276,14 @@ public final class GuiManager {
 
         siblings.sort(String.CASE_INSENSITIVE_ORDER);
         return siblings.get(0);
+    }
+
+    private String resolveLobbyServerId() {
+        String configuredLobbyServer = plugin.getConfig().getString("simplecloud.lobby-server-id", "lobby-1");
+        if (configuredLobbyServer == null || configuredLobbyServer.isBlank()) {
+            return "lobby-1";
+        }
+        return configuredLobbyServer.trim();
     }
 
     private void applyPreferredGameMode(Player player, WorldEntry entry) {

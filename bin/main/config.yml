@@ -34,6 +34,7 @@ simplecloud:
   controller-url: "https://controller.simplecloud.app"
   network-id: ""
   network-secret: ""
+  lobby-server-id: "lobby-1"
 
 messages:
   prefix: "&3WorldsGUI &8» &7%messages%"
