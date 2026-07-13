@@ -239,9 +239,15 @@ public final class GuiConfigLoader {
             return null;
         }
 
+        String normalizedType = rawType.trim();
+        if (normalizedType.equalsIgnoreCase("dialog-input")) {
+            // Alias: dialog-input verwendet intern dieselbe Laufzeitlogik wie der bisherige anvil-input Trigger.
+            normalizedType = "anvil-input";
+        }
+
         TriggerType type;
         try {
-            type = TriggerType.valueOf(rawType.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+            type = TriggerType.valueOf(normalizedType.toUpperCase(Locale.ROOT).replace('-', '_'));
         } catch (IllegalArgumentException ex) {
             errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': unbekannter trigger '" + rawType + "'.");
             return null;
@@ -282,15 +288,17 @@ public final class GuiConfigLoader {
                 );
             }
             case ANVIL_INPUT -> {
+                String dialogTitle = triggerSection.getString("dialog-title");
                 String anvilTitle = triggerSection.getString("anvil-title");
+                String inputTitle = (dialogTitle != null && !dialogTitle.isBlank()) ? dialogTitle : anvilTitle;
                 String targetGuiId = triggerSection.getString("gui-id");
                 String paramKey = triggerSection.getString("param-key");
-                if (anvilTitle == null || anvilTitle.isBlank() || targetGuiId == null || targetGuiId.isBlank()
+                if (inputTitle == null || inputTitle.isBlank() || targetGuiId == null || targetGuiId.isBlank()
                     || paramKey == null || paramKey.isBlank()) {
-                    errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': trigger 'anvil-input' benötigt 'anvil-title', 'gui-id' und 'param-key'.");
+                    errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': trigger 'dialog-input' benötigt 'dialog-title' (oder 'anvil-title'), 'gui-id' und 'param-key'.");
                     yield null;
                 }
-                yield GuiTrigger.anvilInput(anvilTitle, targetGuiId, paramKey);
+                yield GuiTrigger.anvilInput(inputTitle, targetGuiId, paramKey);
             }
             case TOGGLE -> {
                 String toggleId = triggerSection.getString("toggle-id");

@@ -75,8 +75,8 @@
 #   Gespeicherte Werte werden später per "%selection:<select-id>%"
 #   in einem "confirm-command" o.ä. wieder ausgelesen.
 #
-# trigger: "anvil-input"
-#   anvil-title: ""    # Titel des Anvil-Textfelds
+# trigger: "dialog-input"
+#   dialog-title: ""    # Titel des Minecraft-Dialog-Textfelds
 #   gui-id: ""          # GUI, das nach der Text-Eingabe geöffnet wird
 #   param-key: ""        # Schlüssel, unter dem der eingegebene Text
 #                          # (NICHT dauerhaft wie bei "select", sondern nur
@@ -118,7 +118,7 @@
 #                        einer mehrstufigen Entscheidungskette, die am
 #                        Ende in einem finalen Command zusammengeführt
 #                        wird (z.B. World-Type + Server -> Welt erstellen).
-# %param:<key>%      -> Wert aus "trigger: anvil-input", ein reiner
+# %param:<key>%      -> Wert aus "trigger: dialog-input", ein reiner
 #                        Übergabewert für den NÄCHSTEN Schritt
 #                        (typischerweise ein Such-/Filterbegriff),
 #                        kein Teil einer langfristigen Auswahl-Kette.
@@ -143,7 +143,7 @@
 # - invited-friends / select-friend: from 0 bis 44 (45 Slots) hat
 #   ebenfalls keine Pagination. Bei mehr als 45 getrusteten Spielern
 #   bzw. Suchtreffern würde die Liste abgeschnitten.
-# - Bei leerem Such-Text in select-friend (Anvil ohne Eingabe
+  # - Bei leerem Such-Text in select-friend (Dialog ohne Eingabe
 #   bestätigt) muss das Plugin serverseitig festlegen, ob das
 #   "alle Spieler anzeigen" oder "keine Treffer" bedeutet.
 #   Empfehlung: leerer Filter = alle anzeigen.
@@ -210,6 +210,25 @@ guis:
           trigger: "command"
           command: "%confirm-command%"
 
+  # Bestätigungs-GUI für Umbenennung nach dialog-input.
+  # Nutzt den im Dialog eingegebenen Text aus %param:new-world-name%.
+  rename-world-confirm:
+    gui-size: 27
+    title: "&7Welt umbenennen?"
+    slots:
+      slot-3:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-5:
+        material: "NAME_TAG"
+        title: "Bestätigen"
+        action:
+          trigger: "command"
+          command: "nav my-world rename %world% %param:new-world-name%"
+          chat-feedback: false
+
   # Startseite bei /nav
   my-worlds:
     gui-size: 54
@@ -257,11 +276,10 @@ guis:
         material: "NAME_TAG"
         title: "Welt-Name ändern"
         action:
-          trigger: "command"
-          # Öffnet ein Dialog-Fenster (Minecraft Dialog-API, 1.21.6+)
-          # zur Texteingabe des neuen Namens, kein GUI-Wechsel nötig.
-          command: "nav my-world rename %world%"
-          chat-feedback: false # keine Chat-Nachricht, wenn der Spieler hier was klickt
+          trigger: "dialog-input"
+          dialog-title: "Neuen Weltnamen eingeben"
+          gui-id: "rename-world-confirm"
+          param-key: "new-world-name"
       slot-7:
         material: "ENDER_EYE"
         title: "Welt Spawn setzen"
@@ -395,8 +413,10 @@ guis:
         material: "ANVIL"
         title: "Spieler suchen"
         action:
-          trigger: "open-gui"
+          trigger: "dialog-input"
+          dialog-title: "Spielername eingeben"
           gui-id: "select-friend"
+          param-key: "search"
       slot-range:
         from: 0
         to: 44 # endet bewusst VOR slot-1/slot-9 (45-53), keine Kollision
@@ -425,8 +445,8 @@ guis:
         material: "ANVIL"
         title: "Spieler suchen"
         action:
-          trigger: "anvil-input"
-          anvil-title: "Spielername eingeben"
+          trigger: "dialog-input"
+          dialog-title: "Spielername eingeben"
           gui-id: "select-friend"
           param-key: "search"
       slot-range:
@@ -454,11 +474,19 @@ guis:
         title: "Zurück"
         action:
           trigger: "return"
+      slot-9:
+        material: "ANVIL"
+        title: "Spieler suchen"
+        action:
+          trigger: "dialog-input"
+          dialog-title: "Spielername eingeben"
+          gui-id: "select-friend"
+          param-key: "search"
       slot-range:
         from: 0
         to: 44
         source: "luckperms-players" # alle registrierten Spieler laut LuckPerms
-        filter: "%param:search%" # Suchbegriff aus dem anvil-input in invited-friends
+        filter: "%param:search%" # Suchbegriff aus dem dialog-input in invited-friends
         material: "%player_head%"
         title: "%target_player_name%"
         action:

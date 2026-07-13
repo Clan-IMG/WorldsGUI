@@ -382,13 +382,15 @@ public final class GuiManager {
         }
 
         if ("luckperms-players".equalsIgnoreCase(source)) {
-            List<String> players = new ArrayList<>();
-            for (Player online : Bukkit.getOnlinePlayers()) {
-                players.add(online.getName());
-            }
-            for (OfflinePlayer offline : Bukkit.getOfflinePlayers()) {
-                if (offline.getName() != null && !offline.getName().isBlank()) {
-                    players.add(offline.getName());
+            List<String> players = resolveRegisteredLuckPermsPlayers();
+            if (players.isEmpty()) {
+                for (Player online : Bukkit.getOnlinePlayers()) {
+                    players.add(online.getName());
+                }
+                for (OfflinePlayer offline : Bukkit.getOfflinePlayers()) {
+                    if (offline.getName() != null && !offline.getName().isBlank()) {
+                        players.add(offline.getName());
+                    }
                 }
             }
             return toPlayerSlotItems(players, filter, player.getName());
@@ -413,6 +415,11 @@ public final class GuiManager {
 
             String normalized = playerName.trim();
             if (normalized.isBlank()) {
+                continue;
+            }
+
+            // Blendet unerwünschte Dummy-Einträge aus, die in manchen Setups in der Liste landen.
+            if ("dynamic".equalsIgnoreCase(normalized)) {
                 continue;
             }
 
@@ -575,6 +582,103 @@ public final class GuiManager {
         }
         openGui(player, "my-worlds");
         syncAssignedTicketWorlds(player);
+    }
+
+    /**
+     * Holt registrierte User aus LuckPerms (falls verfügbar) ohne harte Compile-Abhängigkeit.
+     * Fällt auf eine leere Liste zurück, wenn LuckPerms fehlt oder die API nicht erreichbar ist.
+     */
+    private List<String> resolveRegisteredLuckPermsPlayers() {
+        List<String> names = new ArrayList<>();
+        try {
+            Class<?> providerClass = Class.forName("net.luckperms.api.LuckPermsProvider");
+            Object api = providerClass.getMethod("get").invoke(null);
+            if (api == null) {
+                return names;
+            }
+
+            Object userManager = api.getClass().getMethod("getUserManager").invoke(api);
+            if (userManager == null) {
+                return names;
+            }
+
+            Object uniqueUsersObj = userManager.getClass().getMethod("getUniqueUsers").invoke(userManager);
+            if (!(uniqueUsersObj instanceof Iterable<?> uniqueUsers)) {
+                return names;
+            }
+
+            Method lookupUsernameMethod = null;
+            Method getUserMethod = null;
+            Method userGetUsernameMethod = null;
+            try {
+                lookupUsernameMethod = userManager.getClass().getMethod("lookupUsername", UUID.class);
+            } catch (NoSuchMethodException ignored) {
+                // Ältere/abweichende API-Variante: dann nur Bukkit-Namenauflösung.
+            }
+            try {
+                getUserMethod = userManager.getClass().getMethod("getUser", UUID.class);
+            } catch (NoSuchMethodException ignored) {
+                // Optional.
+            }
+
+            for (Object entry : uniqueUsers) {
+                if (!(entry instanceof UUID uuid)) {
+                    continue;
+                }
+
+                String name = null;
+                if (getUserMethod != null) {
+                    Object userObj = getUserMethod.invoke(userManager, uuid);
+                    if (userObj != null) {
+                        if (userGetUsernameMethod == null) {
+                            try {
+                                userGetUsernameMethod = userObj.getClass().getMethod("getUsername");
+                            } catch (NoSuchMethodException ignored) {
+                                // Dann bleibt nur lookupUsername/Bukkit-Fallback.
+                            }
+                        }
+                        if (userGetUsernameMethod != null) {
+                            Object loadedName = userGetUsernameMethod.invoke(userObj);
+                            if (loadedName instanceof String s && !s.isBlank()) {
+                                name = s;
+                            }
+                        }
+                    }
+                }
+
+                if (lookupUsernameMethod != null) {
+                    Object futureObj = lookupUsernameMethod.invoke(userManager, uuid);
+                    if (futureObj instanceof CompletableFuture<?> future) {
+                        Object resolved = future.getNow(null);
+                        if (!(resolved instanceof String)) {
+                            try {
+                                // Kurzer, begrenzter Wait für Cache/Storage-Antwort ohne langen Main-Thread-Block.
+                                resolved = future.get(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+                            } catch (Exception ignored) {
+                                resolved = null;
+                            }
+                        }
+                        if (resolved instanceof String s && !s.isBlank()) {
+                            name = s;
+                        }
+                    }
+                }
+
+                if (name == null || name.isBlank()) {
+                    OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+                    if (offline != null && offline.getName() != null && !offline.getName().isBlank()) {
+                        name = offline.getName();
+                    }
+                }
+
+                if (name != null && !name.isBlank()) {
+                    names.add(name);
+                }
+            }
+        } catch (Throwable ignored) {
+            // LuckPerms nicht vorhanden oder API nicht verfügbar -> Fallback erfolgt beim Aufrufer.
+        }
+        return names;
     }
 
     public void executeSetSpawn(Player player) {
