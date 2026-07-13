@@ -399,6 +399,7 @@ guis:
   # Zeigt bereits für %world% eingeladene Spieler als Köpfe an
   # (source: invited-players, WELT-spezifisch, nicht global).
   # Rechtsklick entfernt die Einladung sofort.
+  
   invited-friends:
     gui-size: 54
     title: "Freunde ansehen"
@@ -411,12 +412,10 @@ guis:
           trigger: "return"
       slot-9:
         material: "ANVIL"
-        title: "Spieler suchen"
+        title: "Spieler hinzufügen"
         action:
-          trigger: "dialog-input"
-          dialog-title: "Spielername eingeben"
+          trigger: "open-gui"
           gui-id: "select-friend"
-          param-key: "search"
       slot-range:
         from: 0
         to: 44 # endet bewusst VOR slot-1/slot-9 (45-53), keine Kollision
@@ -431,6 +430,7 @@ guis:
 
   # Zeigt bereits für %world% zum Bauen berechtigte Spieler als Köpfe an.
   # Rechtsklick entfernt die Bau-Berechtigung sofort.
+  # freunde ansehen
   trusted-friends:
     gui-size: 54
     title: "Bauzugriff verwalten"
@@ -462,6 +462,7 @@ guis:
   # gefiltert nach dem in invited-friends eingegebenen Suchbegriff.
   # Linksklick fügt den Spieler als Sichtzugriff hinzu.
   # Rechtsklick vergibt Bau-Rechte.
+  # spieler auswählen
   select-friend:
     gui-size: 54
     title: "Spieler auswählen"
@@ -473,7 +474,7 @@ guis:
         action:
           trigger: "return"
       slot-9:
-        material: "ANVIL"
+        material: "COMPASS"
         title: "Spieler suchen"
         action:
           trigger: "dialog-input"

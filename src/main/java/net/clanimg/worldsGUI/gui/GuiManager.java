@@ -843,6 +843,7 @@ public final class GuiManager {
                 }
 
                 applyConfiguredGameRules(world);
+                applyWorldGuardProtection(world, ownerUuid, ownerName, List.of(), List.of());
 
                 setAnyGameRule(world, false, "spawn_mobs", "doMobSpawning");
                 setAnyGameRule(world, false, "advance_weather", "weather_cycle", "doWeatherCycle");
@@ -2061,6 +2062,7 @@ public final class GuiManager {
 
         PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
         if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
+            session.clearParam("search");
             String previousGuiId = session.popHistory();
             if (previousGuiId != null && !previousGuiId.isBlank()) {
                 session.setCurrentGuiId(previousGuiId);
@@ -2679,8 +2681,15 @@ public final class GuiManager {
             send(player, "not-world-owner");
             return;
         }
-        repository.setDisplayName(worldName, newDisplayName);
+        if (!repository.setDisplayName(worldName, newDisplayName)) {
+            player.sendMessage("§cDer Anzeigename konnte nicht gespeichert werden.");
+            return;
+        }
+
         send(player, "rename-success", "%name%", newDisplayName);
+        if (player.isOnline()) {
+            openEditWorldGui(player, worldName);
+        }
     }
 
     private void applyIcon(Player player, String worldName, String input) {
@@ -3052,6 +3061,7 @@ public final class GuiManager {
                 }
 
                 applyConfiguredGameRules(world);
+                applyWorldGuardProtection(world, player.getUniqueId().toString(), player.getName(), List.of(), List.of());
 
                 setAnyGameRule(world, false, "spawn_mobs", "doMobSpawning");
                 setAnyGameRule(world, false, "advance_weather", "weather_cycle", "doWeatherCycle");

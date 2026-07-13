@@ -394,10 +394,11 @@ public final class WorldsRepository {
         patchOrWarn("/worlds/" + encode(worldName) + "/public", body);
     }
 
-    public void setDisplayName(String worldName, String value) {
+    public boolean setDisplayName(String worldName, String value) {
         JsonObject body = new JsonObject();
         body.addProperty("value", value);
-        patchOrWarn("/worlds/" + encode(worldName) + "/display-name", body);
+        body.addProperty("displayName", value);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/display-name", body);
     }
 
     public void setIcon(String worldName, String value) {

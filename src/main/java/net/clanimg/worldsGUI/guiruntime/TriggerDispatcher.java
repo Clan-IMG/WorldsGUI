@@ -74,6 +74,9 @@ public final class TriggerDispatcher {
     }
 
     private void executeReturn(Player player, PlayerGuiSession session) {
+        if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
+            session.clearParam("search");
+        }
         String previous = session.popHistory();
         if (previous == null) {
             player.closeInventory();
