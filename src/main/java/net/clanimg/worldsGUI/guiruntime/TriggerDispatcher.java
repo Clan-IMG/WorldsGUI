@@ -10,14 +10,26 @@ import org.bukkit.entity.Player;
  * Das eigentliche Rendern/Öffnen von Inventaren übernimmt {@link GuiOpener} (Bukkit-Schicht).
  */
 public final class TriggerDispatcher {
+    @FunctionalInterface
+    public interface RuntimeMessageSender {
+        void send(Player player, String key, String fallbackLiteral, String... replacements);
+    }
+
     private final GuiOpener guiOpener;
     private final CommandDispatcher commandDispatcher;
     private final AnvilInputRequester anvilInputRequester;
+    private final RuntimeMessageSender messageSender;
 
-    public TriggerDispatcher(GuiOpener guiOpener, CommandDispatcher commandDispatcher, AnvilInputRequester anvilInputRequester) {
+    public TriggerDispatcher(
+        GuiOpener guiOpener,
+        CommandDispatcher commandDispatcher,
+        AnvilInputRequester anvilInputRequester,
+        RuntimeMessageSender messageSender
+    ) {
         this.guiOpener = guiOpener;
         this.commandDispatcher = commandDispatcher;
         this.anvilInputRequester = anvilInputRequester;
+        this.messageSender = messageSender;
     }
 
     /**
@@ -44,7 +56,13 @@ public final class TriggerDispatcher {
         if (trigger.clicks() > 1 && triggerKey != null) {
             int count = session.incrementClickCounter(triggerKey);
             if (count < trigger.clicks()) {
-                player.sendMessage("§eNoch " + (trigger.clicks() - count) + "x klicken zum Bestätigen.");
+                messageSender.send(
+                    player,
+                    "runtime.confirm-clicks-remaining",
+                    "&eNoch %remaining%x klicken zum Bestätigen.",
+                    "%remaining%",
+                    String.valueOf(trigger.clicks() - count)
+                );
                 return;
             }
             session.resetClickCounter(triggerKey);
@@ -52,7 +70,7 @@ public final class TriggerDispatcher {
 
         String expanded = PlaceholderExpander.expand(trigger.command(), player, session, extra);
         if (expanded == null || expanded.isBlank()) {
-            player.sendMessage("§cDieser Command konnte nicht ausgeführt werden (fehlender Wert).");
+            messageSender.send(player, "runtime.command-missing-value", "&cDieser Command konnte nicht ausgeführt werden (fehlender Wert).");
             return;
         }
 
@@ -124,7 +142,7 @@ public final class TriggerDispatcher {
 
         String expanded = PlaceholderExpander.expand(state.command(), player, session, extra);
         if (expanded == null || expanded.isBlank()) {
-            player.sendMessage("§cDieser Toggle-Command konnte nicht ausgeführt werden (fehlender Wert).");
+            messageSender.send(player, "runtime.toggle-command-missing-value", "&cDieser Toggle-Command konnte nicht ausgeführt werden (fehlender Wert).");
             return;
         }
 

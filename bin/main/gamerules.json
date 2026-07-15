@@ -1,7 +1,0 @@
-[
-	"/gamerule advance_time false",
-	"/gamerule advance_weather false",
-	"/gamerule fall_damage false",
-	"/gamerule keep_inventory true",
-	"/gamerule spawn_mobs false"
-]

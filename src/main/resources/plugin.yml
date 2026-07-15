@@ -41,6 +41,10 @@ commands:
   exit:
     description: Beendet den Spieler-Modus der Konsole
     usage: /exit
+  worldsgui:
+    description: WorldsGUI Verwaltung
+    permission: worldsgui.command.reload
+    usage: /worldsgui reload
 
 permissions:
   worldsgui.use:
@@ -147,6 +151,9 @@ permissions:
     default: op
   worldsgui.command.unverify:
     description: Erlaubt /unverify
+    default: op
+  worldsgui.command.reload:
+    description: Erlaubt /worldsgui reload
     default: op
   worldsgui.admin:
     description: Hat alle Rechte, sieht alle Aufträge/Welten sowie private Welten bei Einladung, Cooldown bei my-world create betrifft diese Permission nicht
