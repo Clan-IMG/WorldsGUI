@@ -4967,7 +4967,7 @@ public final class GuiManager {
     @SuppressWarnings("unchecked")
     private List<String> readMessageLinesFromPath(String path) {
         if (!containsMessagePath(path)) {
-            return List.of();
+            return new ArrayList<>();
         }
 
         Object value = readMessageValue(path);
