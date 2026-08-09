@@ -3001,7 +3001,10 @@ public final class GuiManager {
         }
 
         if (mode == ViewMode.INVITED) {
-            return repository.listInvitedWorlds(playerName);
+            return repository.listInvitedWorlds(playerName)
+                .stream()
+                .filter(entry -> !isTicketWorld(entry))
+                .toList();
         }
 
         if (mode == ViewMode.ARCHIVED) {
