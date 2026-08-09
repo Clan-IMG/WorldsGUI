@@ -198,7 +198,8 @@ public final class GuiManager {
                 }
             },
             this::requestAnvilInput,
-            (player, key, fallbackLiteral, replacements) -> sendNoPrefixConfigured(player, key, fallbackLiteral, replacements)
+            (player, key, fallbackLiteral, replacements) -> sendNoPrefixConfigured(player, key, fallbackLiteral, replacements),
+            guiId -> guiConfig == null ? null : guiConfig.get(guiId).map(GuiDefinition::returnGuiId).orElse(null)
         );
     }
 
@@ -540,40 +541,39 @@ public final class GuiManager {
     private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
         String token = materialTemplate == null ? "" : materialTemplate.trim();
         if ("%player_head%".equalsIgnoreCase(token)) {
-            return buildPlayerHeadItem(title, player, session, extra);
+            // %player_head% ist immer der Kopf des Spielers, der das GUI gerade geöffnet hat.
+            return buildPlayerHeadItem(title, player, player == null ? null : player.getName());
         }
         if ("%target_player_head%".equalsIgnoreCase(token)) {
-            return buildPlayerHeadItem(title, player, session, extra);
+            // %target_player_head% ist der Kopf des Spielers aus der dynamisch generierten Liste
+            // (z.B. eingeladene/getrustete Spieler), NICHT der eigene Kopf des Betrachters.
+            String targetName = extra == null ? null : extra.get("target_player_name");
+            if (targetName == null || targetName.isBlank()) {
+                targetName = player == null ? null : player.getName();
+            }
+            return buildPlayerHeadItem(title, player, targetName);
         }
 
         Material material = resolveMaterial(materialTemplate);
         return namedItem(material, title);
     }
 
-    private ItemStack buildPlayerHeadItem(String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
+    private ItemStack buildPlayerHeadItem(String title, Player viewer, String targetName) {
         ItemStack item = new ItemStack(Material.PLAYER_HEAD);
         ItemMeta meta = item.getItemMeta();
         if (!(meta instanceof SkullMeta skullMeta)) {
             return namedItem(Material.PLAYER_HEAD, title);
         }
 
-        String targetName = null;
-        if (extra != null) {
-            targetName = firstNonBlank(
-                extra.get("target_player_name"),
-                extra.get("player_name")
-            );
-        }
-        if (targetName == null || targetName.isBlank()) {
-            targetName = PlaceholderExpander.expand("%target_player_name%", player, session, extra);
-        }
-        if (targetName == null || targetName.isBlank()) {
-            targetName = player == null ? null : player.getName();
-        }
-
         if (targetName != null && !targetName.isBlank()) {
-            OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(targetName);
-            skullMeta.setOwningPlayer(cached != null ? cached : Bukkit.getOfflinePlayer(targetName));
+            if (viewer != null && viewer.getName().equalsIgnoreCase(targetName)) {
+                // Der Online-Spieler hat sein Profil (inkl. Skin-Textur) bereits geladen -
+                // Bukkit.getOfflinePlayer(...) liefert hier sonst oft nur den Default-Kopf.
+                skullMeta.setOwningPlayer(viewer);
+            } else {
+                OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(targetName);
+                skullMeta.setOwningPlayer(cached != null ? cached : Bukkit.getOfflinePlayer(targetName));
+            }
         }
 
         skullMeta.displayName(legacy(title));
@@ -2497,7 +2497,21 @@ public final class GuiManager {
     private void completeAnvilInput(Player player, GuiTrigger trigger, String input) {
         PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
         session.putParam(trigger.paramKey(), input == null ? "" : input);
-        session.pushCurrentToHistory();
+
+        if (!trigger.params().isEmpty()) {
+            Map<String, String> expandedParams = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : trigger.params().entrySet()) {
+                expandedParams.put(entry.getKey(), PlaceholderExpander.expand(entry.getValue(), player, session, Map.of()));
+            }
+            session.putGuiParams(expandedParams);
+        }
+
+        String currentGuiId = session.currentGuiId();
+        if (currentGuiId == null || !currentGuiId.equalsIgnoreCase(trigger.guiId())) {
+            // Kein History-Eintrag, wenn das Ziel-GUI dasselbe ist (z.B. Such-Filter-Refresh),
+            // sonst würde "return" später nur wieder auf dieses GUI selbst zurückführen.
+            session.pushCurrentToHistory();
+        }
         session.setCurrentGuiId(trigger.guiId());
         openGui(player, trigger.guiId());
     }
@@ -4736,39 +4750,49 @@ public final class GuiManager {
         }
 
         boolean isCurrentWorld = currentWorldName != null && currentWorldName.equalsIgnoreCase(entry.worldName());
+        boolean hasSettingsRights = mode == ViewMode.OWN;
 
+        Map<String, String> placeholders = new LinkedHashMap<>();
+        placeholders.put("%displayname%", entry.displayName());
+        placeholders.put("%owner_typ%", isTicketWorld(entry) ? "Kunde" : "Owner");
+        placeholders.put("%player%", entry.ownerName() == null ? "" : entry.ownerName());
+        placeholders.put("%server%", entry.serverName() == null ? "" : entry.serverName());
+        placeholders.put("%status%", hoverStatusText(entry));
+        placeholders.put("%right_click%", hasSettingsRights ? "&r&7<Rechtsklick> &bEinstellungen" : "");
+
+        String titleTemplate = plugin.getConfig().getString("hoover-dialog.title", "&b%displayname%");
+        String title = ChatColor.translateAlternateColorCodes('&', applyPlaceholders(titleTemplate, placeholders));
+
+        List<String> lineTemplates = plugin.getConfig().getStringList("hoover-dialog.lines");
         List<Component> lore = new ArrayList<>();
-        if (isCurrentWorld) {
-            lore.add(Component.text("Du befindest dich gerade in dieser Welt.", NamedTextColor.GREEN));
-        }
-        lore.add(Component.text("Owner: " + entry.ownerName(), NamedTextColor.GRAY));
-        if (entry.ticketOrderId() != null && !entry.ticketOrderId().isBlank()) {
-            lore.add(Component.text("Ticket: #" + entry.ticketOrderId(), NamedTextColor.GOLD));
-        }
-        if (entry.serverName() != null && !entry.serverName().isBlank()) {
-            lore.add(Component.text("Server: " + entry.serverName(), NamedTextColor.GRAY));
-        }
-        if (entry.orderLabel() != null && !entry.orderLabel().isBlank()) {
-            lore.add(Component.text("Auftrag: #" + entry.orderLabel(), NamedTextColor.AQUA));
-        }
-        if (entry.customers() != null && !entry.customers().isEmpty()) {
-            lore.add(Component.text("Kunden: " + String.join(", ", entry.customers()), NamedTextColor.LIGHT_PURPLE));
-        }
-        lore.add(Component.text("Einladungen: " + entry.invitedPlayers().size() + " | Trust: " + entry.trustedPlayers().size(), NamedTextColor.GRAY));
-        lore.add(Component.text(entry.isPublic() ? "Status: Öffentlich" : "Status: Privat", entry.isPublic() ? NamedTextColor.GREEN : NamedTextColor.RED));
-        if (entry.isArchived()) {
-            lore.add(Component.text("Status: Archiviert", NamedTextColor.RED));
-        }
-        if (mode == ViewMode.INVITED) {
-            lore.add(Component.text("Du bist in dieser Welt eingeladen.", NamedTextColor.AQUA));
-        }
-        lore.add(Component.empty());
-        lore.add(Component.text("Linksklick: Beitreten", NamedTextColor.YELLOW));
-        if (mode == ViewMode.OWN) {
-            lore.add(Component.text("Rechtsklick: Einstellungen", NamedTextColor.YELLOW));
+        for (String lineTemplate : lineTemplates) {
+            String resolved = applyPlaceholders(lineTemplate, placeholders);
+            if (lineTemplate.contains("%right_click%") && resolved.isBlank()) {
+                continue;
+            }
+            lore.add(legacyLine(resolved));
         }
 
-        return namedWorldItem(material, "§b" + entry.displayName(), entry.worldName(), lore, isCurrentWorld);
+        return namedWorldItem(material, title, entry.worldName(), lore, isCurrentWorld);
+    }
+
+    private String hoverStatusText(WorldEntry entry) {
+        if (entry.isArchived()) {
+            return "Archiviert";
+        }
+        return entry.isPublic() ? "Öffentlich" : "Privat";
+    }
+
+    private String applyPlaceholders(String template, Map<String, String> placeholders) {
+        String result = template == null ? "" : template;
+        for (Map.Entry<String, String> placeholder : placeholders.entrySet()) {
+            result = result.replace(placeholder.getKey(), placeholder.getValue());
+        }
+        return result;
+    }
+
+    private Component legacyLine(String line) {
+        return legacy(ChatColor.translateAlternateColorCodes('&', line));
     }
 
     private Component titleForMain(ViewMode mode, int page) {

@@ -35,3 +35,14 @@ simplecloud:
   network-id: ""
   network-secret: ""
   lobby-server-id: "lobby-1"
+
+hoover-dialog:
+  title: "&r&b%displayname%"
+  lines:
+    - "&r&7%owner_typ%: %player%"
+    - "&r&7Server: %server%"
+    #- "Status: %status%" 
+    - ""
+    - "&r&7<Linksklick> &bBetreten"
+    - "%right_click%" # "&r&7<Rechtsklick> &bEinstellungen"
+

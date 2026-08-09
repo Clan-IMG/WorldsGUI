@@ -2,6 +2,7 @@ package net.clanimg.worldsGUI.guiruntime;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 import net.clanimg.worldsGUI.guiconfig.GuiTrigger;
 import org.bukkit.entity.Player;
 
@@ -19,17 +20,20 @@ public final class TriggerDispatcher {
     private final CommandDispatcher commandDispatcher;
     private final AnvilInputRequester anvilInputRequester;
     private final RuntimeMessageSender messageSender;
+    private final UnaryOperator<String> returnGuiIdResolver;
 
     public TriggerDispatcher(
         GuiOpener guiOpener,
         CommandDispatcher commandDispatcher,
         AnvilInputRequester anvilInputRequester,
-        RuntimeMessageSender messageSender
+        RuntimeMessageSender messageSender,
+        UnaryOperator<String> returnGuiIdResolver
     ) {
         this.guiOpener = guiOpener;
         this.commandDispatcher = commandDispatcher;
         this.anvilInputRequester = anvilInputRequester;
         this.messageSender = messageSender;
+        this.returnGuiIdResolver = returnGuiIdResolver;
     }
 
     /**
@@ -74,10 +78,17 @@ public final class TriggerDispatcher {
             return;
         }
 
-        if (trigger.chatFeedback()) {
+        boolean navigatesAfterCommand = trigger.guiId() != null && !trigger.guiId().isBlank();
+        if (!navigatesAfterCommand && trigger.chatFeedback()) {
             player.closeInventory();
         }
         commandDispatcher.dispatch(player, expanded, trigger.chatFeedback());
+
+        if (navigatesAfterCommand) {
+            session.pushCurrentToHistory();
+            session.setCurrentGuiId(trigger.guiId());
+            guiOpener.openGui(player, trigger.guiId());
+        }
     }
 
     private void executeOpenGui(Player player, PlayerGuiSession session, GuiTrigger trigger, Map<String, String> extra) {
@@ -95,6 +106,17 @@ public final class TriggerDispatcher {
         if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
             session.clearParam("search");
         }
+
+        // Festes Ziel-GUI (return-gui-id in guis.yml) hat Vorrang vor der Historie, damit
+        // GUIs, die sich selbst wiederholt in die Historie schieben (z.B. Suche/Filter), immer
+        // an einem sinnvollen Punkt landen.
+        String fixedTarget = returnGuiIdResolver == null ? null : returnGuiIdResolver.apply(session.currentGuiId());
+        if (fixedTarget != null && !fixedTarget.isBlank()) {
+            session.setCurrentGuiId(fixedTarget);
+            guiOpener.openGui(player, fixedTarget);
+            return;
+        }
+
         String previous = session.popHistory();
         if (previous == null) {
             player.closeInventory();
