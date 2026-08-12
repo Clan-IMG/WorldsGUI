@@ -1,0 +1,61 @@
+# Standard-Defaults, die beim Erstellen/Importieren/Klonen einer Welt automatisch angewendet werden.
+# Platzhalter in post-create-commands:
+# %world% / %region%        -> Original-Weltname
+# %world_lower% / %region_lower% -> Weltname in Kleinbuchstaben
+
+world-defaults:
+  # Beim Betreten einer verwalteten Welt automatisch den Modus setzen.
+  apply-on-join: true
+  game-mode: "CREATIVE"
+
+  # false = kein Vital-Verlust (Leben/Hunger werden gehalten)
+  # true  = normales Minecraft-Verhalten
+  lost-vital: false
+
+  # Wenn true, gilt der Vital-Schutz nur in vom Plugin verwalteten Welten.
+  lost-vital-managed-worlds-only: true
+
+  # Eigene Minecraft-Gamerules (pro neu erstellter/importierter/geklonter Welt).
+  # Format: "<name> <true|false>"
+  # Alte Namen wie advance_time / advance_weather / spawn_mobs werden automatisch gemappt.
+  gamerules:
+    - "advance_time false"
+    - "advance_weather false"
+    - "fall_damage false"
+    - "keep_inventory true"
+    - "spawn_mobs false"
+
+  # WorldGuard-Flags als Key-Value (wird automatisch in rg-flag Commands umgesetzt).
+  # Beispiel fuer State-Flags: allow / deny
+  worldguard:
+    flags:
+      deny-message: "&r"
+      entry-deny-message: "&r"
+      exit-deny-message: "&r"
+      game-mode: "creative"
+      build: "deny"
+      block-break: "deny"
+      block-place: "deny"
+      use: "allow"
+      interact: "allow"
+      mob-spawning: "deny"
+      lava-fire: "deny"
+      snow-fall: "deny"
+      snow-melt: "deny"
+      ice-form: "deny"
+      ice-melt: "deny"
+      frosted-ice-melt: "deny"
+      frosted-ice-form: "deny"
+      mushroom-growth: "deny"
+      leaf-decay: "deny"
+      grass-growth: "deny"
+      fall-damage: "deny"
+      pvp: "deny"
+
+
+  # Optional: freie Zusatz-Commands nach Gamerules/WorldGuard.
+  # Kann leer bleiben.
+  post-create-commands: []
+
+
+    

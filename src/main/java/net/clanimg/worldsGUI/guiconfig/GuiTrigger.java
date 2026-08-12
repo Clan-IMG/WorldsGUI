@@ -51,8 +51,8 @@ public final class GuiTrigger {
         this.toggleStates = toggleStates == null ? Map.of() : Map.copyOf(toggleStates);
     }
 
-    public static GuiTrigger command(String command, int clicks, boolean chatFeedback) {
-        return new GuiTrigger(TriggerType.COMMAND, command, Math.max(1, clicks), chatFeedback, null, null, null, null, null, null, null, null, null);
+    public static GuiTrigger command(String command, int clicks, boolean chatFeedback, String guiId) {
+        return new GuiTrigger(TriggerType.COMMAND, command, Math.max(1, clicks), chatFeedback, guiId, null, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger openGui(String guiId, Map<String, String> params) {
@@ -67,8 +67,8 @@ public final class GuiTrigger {
         return new GuiTrigger(TriggerType.SELECT, null, 1, true, guiId, params, selectId, selectValue, null, null, null, null, null);
     }
 
-    public static GuiTrigger anvilInput(String anvilTitle, String guiId, String paramKey) {
-        return new GuiTrigger(TriggerType.ANVIL_INPUT, null, 1, true, guiId, null, null, null, anvilTitle, paramKey, null, null, null);
+    public static GuiTrigger anvilInput(String anvilTitle, String guiId, String paramKey, Map<String, String> params) {
+        return new GuiTrigger(TriggerType.ANVIL_INPUT, null, 1, true, guiId, params, null, null, anvilTitle, paramKey, null, null, null);
     }
 
     public static GuiTrigger toggle(String toggleId, String startState, Map<String, GuiToggleState> states) {

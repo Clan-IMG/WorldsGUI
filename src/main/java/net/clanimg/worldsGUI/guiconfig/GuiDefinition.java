@@ -13,6 +13,7 @@ public final class GuiDefinition {
     private final Map<Integer, GuiSlotDefinition> rowSlots;
     private final GuiSlotRangeDefinition slotRange;
     private final String autoContentSource;
+    private final String returnGuiId;
 
     public GuiDefinition(
         String id,
@@ -21,7 +22,8 @@ public final class GuiDefinition {
         GuiPosition position,
         Map<Integer, GuiSlotDefinition> rowSlots,
         GuiSlotRangeDefinition slotRange,
-        String autoContentSource
+        String autoContentSource,
+        String returnGuiId
     ) {
         this.id = id;
         this.size = size;
@@ -30,6 +32,7 @@ public final class GuiDefinition {
         this.rowSlots = rowSlots == null ? Map.of() : Map.copyOf(rowSlots);
         this.slotRange = slotRange;
         this.autoContentSource = autoContentSource;
+        this.returnGuiId = returnGuiId;
     }
 
     public String id() {
@@ -64,5 +67,14 @@ public final class GuiDefinition {
      */
     public String autoContentSource() {
         return autoContentSource;
+    }
+
+    /**
+     * Optionales, festes Ziel-GUI für den "return"-Trigger (Feld "return-gui-id" in guis.yml).
+     * Überschreibt die history-basierte Navigation, z.B. wenn dieses GUI (wie select-friend)
+     * durch ein dialog-input immer wieder sich selbst in die Historie schiebt.
+     */
+    public String returnGuiId() {
+        return returnGuiId;
     }
 }

@@ -14,8 +14,10 @@ import net.clanimg.worldsGUI.listener.ChatInputListener;
 import net.clanimg.worldsGUI.listener.ConsoleLoginListener;
 import net.clanimg.worldsGUI.listener.InventoryListener;
 import net.clanimg.worldsGUI.listener.PlayerPresenceListener;
+import net.clanimg.worldsGUI.listener.VitalStateListener;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -26,6 +28,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class WorldsGUI extends JavaPlugin {
     private static final int SERVER_HEARTBEAT_INTERVAL_SECONDS = 10;
+    private static final long TICKET_SYNC_INITIAL_DELAY_TICKS = 20L * 2L;
+    private static final long TICKET_SYNC_INTERVAL_TICKS = 20L * 2L;
 
     private WorldsRepository repository;
     private GuiManager guiManager;
@@ -40,6 +44,8 @@ public final class WorldsGUI extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        saveResource("messages.yml", false);
+        saveResource("world-defaults.yml", false);
 
         String apiBaseUrl = getConfig().getString("api.base-url", "");
         String apiToken = getConfig().getString("api.token", "");
@@ -84,10 +90,11 @@ public final class WorldsGUI extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(new ChatInputListener(guiManager), this);
         Bukkit.getPluginManager().registerEvents(consoleLoginListener, this);
         Bukkit.getPluginManager().registerEvents(new PlayerPresenceListener(this, repository, guiManager), this);
+        Bukkit.getPluginManager().registerEvents(new VitalStateListener(this, guiManager), this);
 
         joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
         presenceRefreshTask = Bukkit.getScheduler().runTaskTimer(this, this::refreshOnlinePresence, 20L, 20L * 20L);
-        ticketSyncTask = Bukkit.getScheduler().runTaskTimer(this, this::syncTicketWorlds, 20L * 10L, 20L * 30L);
+        ticketSyncTask = Bukkit.getScheduler().runTaskTimer(this, this::syncTicketWorlds, TICKET_SYNC_INITIAL_DELAY_TICKS, TICKET_SYNC_INTERVAL_TICKS);
         int roleSyncSeconds = Math.max(15, getConfig().getInt("luckperms.sync-interval-seconds", 30));
         roleSyncTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
             this,
@@ -148,6 +155,62 @@ public final class WorldsGUI extends JavaPlugin {
                 return true;
             });
         }
+        if (getCommand("worldsgui") != null) {
+            getCommand("worldsgui").setExecutor((sender, command, label, args) -> handleWorldsGuiCommand(sender, label, args));
+        }
+    }
+
+    private boolean handleWorldsGuiCommand(CommandSender sender, String label, String[] args) {
+        if (args.length < 1 || !args[0].equalsIgnoreCase("reload")) {
+            guiManager.sendWithPrefix(sender, "usage.worldsgui", "Usage: /%label% reload", "%label%", label);
+            return true;
+        }
+
+        if (!sender.hasPermission(Permissions.RELOAD) && !sender.hasPermission(Permissions.ADMIN)) {
+            guiManager.sendWithPrefix(sender, "no-permission", "Du hast dazu keine Berechtigung!");
+            return true;
+        }
+
+        reloadConfig();
+        saveResource("messages.yml", false);
+        saveResource("world-defaults.yml", false);
+
+        int connectTimeoutSeconds = Math.max(3, getConfig().getInt("api.connect-timeout-seconds", 10));
+        int requestTimeoutSeconds = Math.max(5, getConfig().getInt("api.request-timeout-seconds", 20));
+        String apiBaseUrl = getConfig().getString("api.base-url", "");
+        String apiToken = getConfig().getString("api.token", "");
+        repository.reloadApiSettings(
+            apiBaseUrl,
+            apiToken,
+            Duration.ofSeconds(connectTimeoutSeconds),
+            Duration.ofSeconds(requestTimeoutSeconds)
+        );
+
+        try {
+            GuiConfig guiConfig = GuiConfigLoader.load(this);
+            guiManager.setGuiConfig(guiConfig);
+            guiManager.reloadWorldDefaultsConfig();
+            guiManager.reloadMessagesConfig();
+
+            if (!repository.initialize()) {
+                guiManager.sendWithPrefix(
+                    sender,
+                    "reload.failed",
+                    "Reload fehlgeschlagen: %error%",
+                    "%error%",
+                    repository.lastInitializeError()
+                );
+                getLogger().warning("Reload API-Init fehlgeschlagen: " + repository.lastInitializeError());
+                return true;
+            }
+
+            guiManager.sendWithPrefix(sender, "reload.success", "WorldsGUI Konfiguration wurde neu geladen.");
+        } catch (GuiConfigException ex) {
+            guiManager.sendWithPrefix(sender, "reload.failed", "Reload fehlgeschlagen: %error%", "%error%", ex.getMessage());
+            getLogger().warning("Reload fehlgeschlagen: " + ex.getMessage());
+        }
+
+        return true;
     }
 
     @Override

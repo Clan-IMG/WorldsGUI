@@ -161,7 +161,9 @@ public final class GuiConfigLoader {
             autoContentSource = "invited-worlds";
         }
 
-        return new GuiDefinition(guiId, size, title, position, rowSlots, slotRange, autoContentSource);
+        String returnGuiId = section.getString("return-gui-id");
+
+        return new GuiDefinition(guiId, size, title, position, rowSlots, slotRange, autoContentSource, returnGuiId);
     }
 
     private static GuiSlotDefinition parseSlot(String guiId, String slotKey, ConfigurationSection section, List<String> errors, List<String> warnings) {
@@ -262,7 +264,9 @@ public final class GuiConfigLoader {
                 }
                 int clicks = triggerSection.getInt("clicks", 1);
                 boolean chatFeedback = triggerSection.getBoolean("chat-feedback", true);
-                yield GuiTrigger.command(command, clicks, chatFeedback);
+                // optional: nach dem Command zu diesem GUI navigieren (z.B. zurück zur Übersicht)
+                String targetGuiId = triggerSection.getString("gui-id");
+                yield GuiTrigger.command(command, clicks, chatFeedback, targetGuiId);
             }
             case OPEN_GUI -> {
                 String targetGuiId = triggerSection.getString("gui-id");
@@ -298,7 +302,7 @@ public final class GuiConfigLoader {
                     errors.add("GUI '" + guiId + "', Slot '" + slotKey + "': trigger 'dialog-input' benötigt 'dialog-title' (oder 'anvil-title'), 'gui-id' und 'param-key'.");
                     yield null;
                 }
-                yield GuiTrigger.anvilInput(inputTitle, targetGuiId, paramKey);
+                yield GuiTrigger.anvilInput(inputTitle, targetGuiId, paramKey, parseParams(triggerSection.getConfigurationSection("params")));
             }
             case TOGGLE -> {
                 String toggleId = triggerSection.getString("toggle-id");
@@ -380,6 +384,10 @@ public final class GuiConfigLoader {
                     "slot-range"
                 );
             }
+            if (gui.returnGuiId() != null && !gui.returnGuiId().isBlank()
+                && !guis.containsKey(gui.returnGuiId().toLowerCase(Locale.ROOT))) {
+                errors.add("GUI '" + gui.id() + "': 'return-gui-id' verweist auf unbekanntes GUI '" + gui.returnGuiId() + "'.");
+            }
         }
     }
 
@@ -420,7 +428,8 @@ public final class GuiConfigLoader {
                 if (trigger == null) {
                     continue;
                 }
-                if ((trigger.type() == TriggerType.OPEN_GUI || trigger.type() == TriggerType.SELECT || trigger.type() == TriggerType.ANVIL_INPUT)
+                if ((trigger.type() == TriggerType.OPEN_GUI || trigger.type() == TriggerType.SELECT
+                    || trigger.type() == TriggerType.ANVIL_INPUT || trigger.type() == TriggerType.COMMAND)
                     && trigger.guiId() != null && !trigger.guiId().isBlank()
                     && !guis.containsKey(trigger.guiId().toLowerCase(Locale.ROOT))) {
                     errors.add("GUI '" + gui.id() + "' (" + location + "): referenzierte gui-id '" + trigger.guiId() + "' existiert nicht.");

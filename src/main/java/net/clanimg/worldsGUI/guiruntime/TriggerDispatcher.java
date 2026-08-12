@@ -2,6 +2,7 @@ package net.clanimg.worldsGUI.guiruntime;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 import net.clanimg.worldsGUI.guiconfig.GuiTrigger;
 import org.bukkit.entity.Player;
 
@@ -10,14 +11,29 @@ import org.bukkit.entity.Player;
  * Das eigentliche Rendern/Öffnen von Inventaren übernimmt {@link GuiOpener} (Bukkit-Schicht).
  */
 public final class TriggerDispatcher {
+    @FunctionalInterface
+    public interface RuntimeMessageSender {
+        void send(Player player, String key, String fallbackLiteral, String... replacements);
+    }
+
     private final GuiOpener guiOpener;
     private final CommandDispatcher commandDispatcher;
     private final AnvilInputRequester anvilInputRequester;
+    private final RuntimeMessageSender messageSender;
+    private final UnaryOperator<String> returnGuiIdResolver;
 
-    public TriggerDispatcher(GuiOpener guiOpener, CommandDispatcher commandDispatcher, AnvilInputRequester anvilInputRequester) {
+    public TriggerDispatcher(
+        GuiOpener guiOpener,
+        CommandDispatcher commandDispatcher,
+        AnvilInputRequester anvilInputRequester,
+        RuntimeMessageSender messageSender,
+        UnaryOperator<String> returnGuiIdResolver
+    ) {
         this.guiOpener = guiOpener;
         this.commandDispatcher = commandDispatcher;
         this.anvilInputRequester = anvilInputRequester;
+        this.messageSender = messageSender;
+        this.returnGuiIdResolver = returnGuiIdResolver;
     }
 
     /**
@@ -44,7 +60,13 @@ public final class TriggerDispatcher {
         if (trigger.clicks() > 1 && triggerKey != null) {
             int count = session.incrementClickCounter(triggerKey);
             if (count < trigger.clicks()) {
-                player.sendMessage("§eNoch " + (trigger.clicks() - count) + "x klicken zum Bestätigen.");
+                messageSender.send(
+                    player,
+                    "runtime.confirm-clicks-remaining",
+                    "&eNoch %remaining%x klicken zum Bestätigen.",
+                    "%remaining%",
+                    String.valueOf(trigger.clicks() - count)
+                );
                 return;
             }
             session.resetClickCounter(triggerKey);
@@ -52,14 +74,21 @@ public final class TriggerDispatcher {
 
         String expanded = PlaceholderExpander.expand(trigger.command(), player, session, extra);
         if (expanded == null || expanded.isBlank()) {
-            player.sendMessage("§cDieser Command konnte nicht ausgeführt werden (fehlender Wert).");
+            messageSender.send(player, "runtime.command-missing-value", "&cDieser Command konnte nicht ausgeführt werden (fehlender Wert).");
             return;
         }
 
-        if (trigger.chatFeedback()) {
+        boolean navigatesAfterCommand = trigger.guiId() != null && !trigger.guiId().isBlank();
+        if (!navigatesAfterCommand && trigger.chatFeedback()) {
             player.closeInventory();
         }
         commandDispatcher.dispatch(player, expanded, trigger.chatFeedback());
+
+        if (navigatesAfterCommand) {
+            session.pushCurrentToHistory();
+            session.setCurrentGuiId(trigger.guiId());
+            guiOpener.openGui(player, trigger.guiId());
+        }
     }
 
     private void executeOpenGui(Player player, PlayerGuiSession session, GuiTrigger trigger, Map<String, String> extra) {
@@ -77,6 +106,17 @@ public final class TriggerDispatcher {
         if ("select-friend".equalsIgnoreCase(session.currentGuiId())) {
             session.clearParam("search");
         }
+
+        // Festes Ziel-GUI (return-gui-id in guis.yml) hat Vorrang vor der Historie, damit
+        // GUIs, die sich selbst wiederholt in die Historie schieben (z.B. Suche/Filter), immer
+        // an einem sinnvollen Punkt landen.
+        String fixedTarget = returnGuiIdResolver == null ? null : returnGuiIdResolver.apply(session.currentGuiId());
+        if (fixedTarget != null && !fixedTarget.isBlank()) {
+            session.setCurrentGuiId(fixedTarget);
+            guiOpener.openGui(player, fixedTarget);
+            return;
+        }
+
         String previous = session.popHistory();
         if (previous == null) {
             player.closeInventory();
@@ -124,7 +164,7 @@ public final class TriggerDispatcher {
 
         String expanded = PlaceholderExpander.expand(state.command(), player, session, extra);
         if (expanded == null || expanded.isBlank()) {
-            player.sendMessage("§cDieser Toggle-Command konnte nicht ausgeführt werden (fehlender Wert).");
+            messageSender.send(player, "runtime.toggle-command-missing-value", "&cDieser Toggle-Command konnte nicht ausgeführt werden (fehlender Wert).");
             return;
         }
 

@@ -48,6 +48,9 @@
 # trigger: "command"
 #   command: ""      # Command, wird sofort bei den geforderten Klicks ausgeführt
 #   clicks: 1         # optional, Standard 1, Anzahl nötiger Klicks
+#   gui-id: ""        # optional: öffnet nach dem Command dieses GUI (z.B. zurück zur
+#                      # Übersicht nach "invite"). Ohne gui-id bleibt das aktuelle GUI
+#                      # offen (bzw. schließt sich, wenn chat-feedback: true ist).
 #
 # trigger: "open-gui"
 #   gui-id: ""        # ID eines anderen GUIs (muss in dieser Datei existieren).
@@ -83,6 +86,11 @@
 #                          # als Übergabewert für das nächste GUI) gespeichert
 #                          # wird. Abrufbar im Ziel-GUI per "%param:<param-key>%",
 #                          # z.B. als "filter" in einem slot-range.
+#   params:               # optional, wie bei "open-gui"/"select": Key-Value-Map,
+#                          # die im Ziel-GUI als generischer Platzhalter verfügbar
+#                          # ist (z.B. confirm-command im "confirm"-GUI). Kann hier
+#                          # bereits "%param:<param-key>%" nutzen (Text ist zu diesem
+#                          # Zeitpunkt schon gespeichert).
 #   Anders als "select": hier wird kein bereits sichtbares Item angeklickt,
 #   sondern freier Text eingegeben (z.B. Spielername zum Suchen).
 #
@@ -110,6 +118,15 @@
 #      Rechtsklick = Spieler entfernen/untrusten).
 # Das gilt auch innerhalb von slot-range: die "action" dort kann
 # ebenfalls left-click/right-click getrennt definieren.
+#
+# ------------------------------------------------------------
+# RETURN-GUI-ID (pro GUI, optional)
+# ------------------------------------------------------------
+# return-gui-id: ""  # Top-Level-Feld eines GUIs (neben gui-size/title/position).
+#                      # Wenn gesetzt, führt "trigger: return" IMMER zu diesem GUI,
+#                      # unabhängig von der Navigations-Historie. Wichtig für GUIs,
+#                      # die sich selbst wiederholt in die Historie schieben (z.B.
+#                      # select-friend nach mehrfacher Suche via dialog-input).
 #
 # ------------------------------------------------------------
 # SELECTION vs. PARAM - wichtiger Unterschied
@@ -196,11 +213,11 @@ guis:
   # Generisches Bestätigungs-GUI. %confirm-command% wird beim Öffnen
   # über "params.confirm-command" (aus dem aufrufenden GUI) ersetzt.
   # Wird für alle destruktiven/wichtigen Aktionen genutzt (z.B. Löschen,
-  # finale Welt-Erstellung), NICHT für harmlose/reversible Aktionen
-  # wie trust/untrust.
+  # finale Welt-Erstellung, Umbenennen), NICHT für harmlose/reversible
+  # Aktionen wie trust/untrust.
   confirm:
     gui-size: 27
-    title: "&7Bist du sicher?"
+    title: "Bist du dir sicher?"
     slots:
       slot-5:
         material: "BARRIER"
@@ -209,25 +226,6 @@ guis:
         action:
           trigger: "command"
           command: "%confirm-command%"
-
-  # Bestätigungs-GUI für Umbenennung nach dialog-input.
-  # Nutzt den im Dialog eingegebenen Text aus %param:new-world-name%.
-  rename-world-confirm:
-    gui-size: 27
-    title: "&7Welt umbenennen?"
-    slots:
-      slot-3:
-        material: "SPRUCE_DOOR"
-        title: "Zurück"
-        action:
-          trigger: "return"
-      slot-5:
-        material: "NAME_TAG"
-        title: "Bestätigen"
-        action:
-          trigger: "command"
-          command: "nav my-world rename %world% %param:new-world-name%"
-          chat-feedback: false
 
   # Startseite bei /nav
   my-worlds:
@@ -278,8 +276,10 @@ guis:
         action:
           trigger: "dialog-input"
           dialog-title: "Neuen Weltnamen eingeben"
-          gui-id: "rename-world-confirm"
+          gui-id: "confirm"
           param-key: "new-world-name"
+          params:
+            confirm-command: "nav my-world rename %world% %param:new-world-name%"
       slot-7:
         material: "ENDER_EYE"
         title: "Welt Spawn setzen"
@@ -420,7 +420,7 @@ guis:
         from: 0
         to: 44 # endet bewusst VOR slot-1/slot-9 (45-53), keine Kollision
         source: "invited-players" # nur Spieler, die für DIESE Welt (%world%) bereits eingeladen sind
-        material: "%player_head%"
+        material: "%target_player_head%"
         title: "%target_player_name%"
         action:
           trigger: "open-gui"
@@ -451,7 +451,7 @@ guis:
         from: 0
         to: 44
         source: "trusted-players"
-        material: "%player_head%"
+        material: "%target_player_head%"
         title: "%target_player_name%"
         action:
           right-click:
@@ -467,6 +467,7 @@ guis:
     gui-size: 54
     title: "Spieler auswählen"
     position: bottom
+    return-gui-id: "invited-friends" # "Zurück" landet immer hier, auch nach mehrfacher Suche
     slots:
       slot-1:
         material: "SPRUCE_DOOR"
@@ -486,12 +487,13 @@ guis:
         to: 44
         source: "luckperms-players" # alle registrierten Spieler laut LuckPerms
         filter: "%param:search%" # Suchbegriff aus dem dialog-input in invited-friends
-        material: "%player_head%"
+        material: "%target_player_head%"
         title: "%target_player_name%"
         action:
           trigger: "command"
           command: "nav my-worlds invite %world% %target_player_name%"
           chat-feedback: false
+          gui-id: "invited-friends" # nach dem Einladen direkt zurück zur Übersicht
   
 
   # 1 2 3 4 5 6 7 8 9

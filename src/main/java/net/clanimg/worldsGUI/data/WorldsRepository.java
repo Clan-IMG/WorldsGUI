@@ -25,10 +25,10 @@ public final class WorldsRepository {
     private static final long WARNING_COOLDOWN_MS = 30_000L;
 
     private final JavaPlugin plugin;
-    private final String apiBaseUrl;
-    private final String apiToken;
-    private final HttpClient httpClient;
-    private final Duration requestTimeout;
+    private String apiBaseUrl;
+    private String apiToken;
+    private HttpClient httpClient;
+    private Duration requestTimeout;
     private final Gson gson;
     private final Map<String, Long> warningCooldowns = new ConcurrentHashMap<>();
     private String lastInitializeError = "Unbekannter Fehler";
@@ -51,6 +51,20 @@ public final class WorldsRepository {
             .connectTimeout(connectTimeout)
             .build();
         this.gson = new Gson();
+    }
+
+    public synchronized void reloadApiSettings(
+        String apiBaseUrl,
+        String apiToken,
+        Duration connectTimeout,
+        Duration requestTimeout
+    ) {
+        this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
+        this.apiToken = apiToken;
+        this.requestTimeout = requestTimeout;
+        this.httpClient = HttpClient.newBuilder()
+            .connectTimeout(connectTimeout)
+            .build();
     }
 
     public boolean initialize() {
