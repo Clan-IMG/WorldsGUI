@@ -129,6 +129,39 @@
 #                      # select-friend nach mehrfacher Suche via dialog-input).
 #
 # ------------------------------------------------------------
+# SLOT-RANGE: MEHRERE BEREICHE, LORE, LEERE SLOTS
+# ------------------------------------------------------------
+# Ein GUI darf mehrere dynamische Listen haben. Neben "slot-range" sind weitere
+# Bereiche mit Suffix erlaubt (z.B. "slot-range-manual"); sie dürfen sich weder
+# untereinander noch mit slot-1..slot-9 überschneiden.
+#
+# Zusätzliche optionale Felder (bei slot-range UND bei slot-1..slot-9):
+#   lore:                  # Beschreibungszeilen (Liste), Platzhalter und &-Farbcodes erlaubt
+#     - "&7Größe: &f%backup_size%"
+#
+# Nur bei slot-range:
+#   empty-material: ""     # Item für Slots des Bereichs, für die es KEIN generiertes Item gibt
+#   empty-title: ""        # Titel dieses Platzhalter-Items (ohne Klick-Aktion)
+#
+# Item-Titel dürfen &-Farbcodes enthalten (z.B. "&aNeues Backup").
+#
+# ------------------------------------------------------------
+# BACKUP-QUELLEN (slot-range "source", je Welt %world%)
+# ------------------------------------------------------------
+# world-backups-auto          -> automatische Backups (nachts 00:00 Uhr), neueste zuerst
+# world-backups-manual        -> manuelle Backups (bleiben, bis man sie löscht)
+# world-backups-undo          -> Stand vor der letzten Wiederherstellung (max. 1)
+# world-backups-restore-job   -> wartende/laufende Wiederherstellung dieser Welt
+# world-backups-backup-job    -> wartendes/laufendes Backup dieser Welt
+#
+# Platzhalter je generiertem Item:
+#   Backups: %backup_id%  %backup_date%  %backup_size%  %backup_age%  %backup_kind%
+#   Aufträge: %job_id%  %job_status%  %job_kind%
+#
+# Aufträge liegen dauerhaft in einer Warteschlange und werden von dem Server ausgeführt,
+# auf dem die Welt liegt - auch wenn dieser gerade offline ist oder neu startet.
+#
+# ------------------------------------------------------------
 # SELECTION vs. PARAM - wichtiger Unterschied
 # ------------------------------------------------------------
 # %selection:<id>%  -> Wert aus "trigger: select", gedacht als Teil
@@ -270,7 +303,7 @@ guis:
         action:
           trigger: "open-gui"
           gui-id: "invited-friends"
-      slot-5:
+      slot-4:
         material: "NAME_TAG"
         title: "Welt-Name ändern"
         action:
@@ -280,13 +313,22 @@ guis:
           param-key: "new-world-name"
           params:
             confirm-command: "nav my-world rename %world% %param:new-world-name%"
-      slot-7:
+      slot-5:
         material: "ENDER_EYE"
         title: "Welt Spawn setzen"
         action:
           trigger: "command"
           command: "nav setspawn %world%"
           chat-feedback: false
+      slot-7:
+        material: "ENDER_CHEST"
+        title: "Backups"
+        lore:
+          - "&7Automatische und manuelle Backups"
+          - "&7dieser Welt ansehen und wiederherstellen."
+        action:
+          trigger: "open-gui"
+          gui-id: "world-backups"
       slot-9:
         material: "BARRIER"
         title: "Löschen"
@@ -295,6 +337,130 @@ guis:
           gui-id: "confirm"
           params:
             confirm-command: "nav my-world delete %world% confirm"
+
+  # Backups der ausgewählten Welt (edit-world -> Backups).
+  # Reihe 1: 7 automatische Backups (nachts 00:00 Uhr, nur wenn sich die Welt geändert hat,
+  #          nach 7 Tagen gelöscht - das neueste bleibt immer erhalten), Slot 8: Stand vor der
+  #          letzten Wiederherstellung (Rückgängig), Slot 7: wartende Wiederherstellung.
+  # Reihe 2: 7 manuelle Backups (bleiben, bis man sie löscht), Slot 17: wartendes Backup.
+  # Linksklick auf ein Backup = wiederherstellen (mit Bestätigung), Rechtsklick auf ein
+  # manuelles Backup = löschen (mit Bestätigung), Rechtsklick auf einen wartenden Auftrag = abbrechen.
+  # Alle Aktionen laufen über eine dauerhafte Warteschlange und werden von dem Server ausgeführt,
+  # auf dem die Welt liegt.
+  world-backups:
+    gui-size: 27
+    title: "Backups"
+    position: bottom
+    return-gui-id: "edit-world" # sonst müsste man nach jedem Backup-Klick mehrfach "Zurück" drücken
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-9:
+        material: "CRAFTING_TABLE"
+        title: "&aNeues Backup erstellen"
+        lore:
+          - "&7Legt ein manuelles Backup an."
+          - "&7Es bleibt, bis du es löschst (max. 7)."
+        action:
+          trigger: "command"
+          command: "nav my-world backup create %world%"
+          gui-id: "world-backups"
+      slot-range-auto:
+        from: 0
+        to: 6
+        source: "world-backups-auto"
+        material: "GRASS_BLOCK"
+        title: "&a%backup_date%"
+        lore:
+          - "&7Art: &f%backup_kind%"
+          - "&7Größe: &f%backup_size%"
+          - "&7Erstellt vor: &f%backup_age%"
+          - ""
+          - "&eLinksklick &7» Wiederherstellen"
+        empty-material: "GRAY_STAINED_GLASS_PANE"
+        empty-title: "&8Kein Backup"
+        action:
+          trigger: "open-gui"
+          gui-id: "confirm"
+          params:
+            confirm-command: "nav my-world backup restore %world% %backup_id%"
+      slot-range-restore-job:
+        from: 7
+        to: 7
+        source: "world-backups-restore-job"
+        material: "HOPPER"
+        title: "&eWiederherstellung: %job_status%"
+        lore:
+          - "&7Wird ausgeführt, sobald der Server"
+          - "&7der Welt bereit ist."
+          - ""
+          - "&cRechtsklick &7» Abbrechen (nur wartend)"
+        action:
+          right-click:
+            trigger: "command"
+            command: "nav my-world backup cancel %world% %job_id%"
+            gui-id: "world-backups"
+      slot-range-undo:
+        from: 8
+        to: 8
+        source: "world-backups-undo"
+        material: "CLOCK"
+        title: "&6Stand vor letzter Wiederherstellung"
+        lore:
+          - "&7Größe: &f%backup_size%"
+          - "&7Erstellt vor: &f%backup_age%"
+          - ""
+          - "&eLinksklick &7» Rückgängig machen"
+        action:
+          trigger: "open-gui"
+          gui-id: "confirm"
+          params:
+            confirm-command: "nav my-world backup restore %world% %backup_id%"
+      slot-range-manual:
+        from: 9
+        to: 15
+        source: "world-backups-manual"
+        material: "PODZOL"
+        title: "&b%backup_date%"
+        lore:
+          - "&7Art: &f%backup_kind%"
+          - "&7Größe: &f%backup_size%"
+          - "&7Erstellt vor: &f%backup_age%"
+          - ""
+          - "&eLinksklick &7» Wiederherstellen"
+          - "&cRechtsklick &7» Löschen"
+        empty-material: "LIGHT_GRAY_STAINED_GLASS_PANE"
+        empty-title: "&8Freier Platz für ein manuelles Backup"
+        action:
+          left-click:
+            trigger: "open-gui"
+            gui-id: "confirm"
+            params:
+              confirm-command: "nav my-world backup restore %world% %backup_id%"
+          right-click:
+            trigger: "open-gui"
+            gui-id: "confirm"
+            params:
+              confirm-command: "nav my-world backup delete %world% %backup_id%"
+      slot-range-backup-job:
+        from: 17
+        to: 17
+        source: "world-backups-backup-job"
+        material: "HOPPER"
+        title: "&eBackup: %job_status%"
+        lore:
+          - "&7Wird ausgeführt, sobald der Server"
+          - "&7der Welt bereit ist."
+          - ""
+          - "&cRechtsklick &7» Abbrechen (nur wartend)"
+        action:
+          right-click:
+            trigger: "command"
+            command: "nav my-world backup cancel %world% %job_id%"
+            gui-id: "world-backups"
 
   # Schritt 1 von 2 beim Welt-Erstellen: World-Type auswählen.
   # Nach Auswahl wird automatisch zu "select-server" weitergeleitet,

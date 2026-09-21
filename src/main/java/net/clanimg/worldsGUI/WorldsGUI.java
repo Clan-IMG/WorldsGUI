@@ -84,6 +84,8 @@ public final class WorldsGUI extends JavaPlugin {
             return;
         }
 
+        guiManager.startBackupService();
+
         consoleLoginListener = new ConsoleLoginListener();
 
         Bukkit.getPluginManager().registerEvents(new InventoryListener(guiManager), this);
@@ -191,6 +193,7 @@ public final class WorldsGUI extends JavaPlugin {
             guiManager.setGuiConfig(guiConfig);
             guiManager.reloadWorldDefaultsConfig();
             guiManager.reloadMessagesConfig();
+            guiManager.reloadBackupSettings();
 
             if (!repository.initialize()) {
                 guiManager.sendWithPrefix(

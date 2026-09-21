@@ -41,7 +41,14 @@ import com.sk89q.worldguard.protection.regions.ProtectedCuboidRegion;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import net.clanimg.worldsGUI.Permissions;
 import net.clanimg.worldsGUI.WorldsGUI;
+import net.clanimg.worldsGUI.backup.BackupFormat;
+import net.clanimg.worldsGUI.backup.BackupService;
+import net.clanimg.worldsGUI.backup.BackupWorldHooks;
 import net.clanimg.worldsGUI.data.WorldsRepository;
+import net.clanimg.worldsGUI.data.WorldsRepository.BackupApiResult;
+import net.clanimg.worldsGUI.data.WorldsRepository.BackupEntry;
+import net.clanimg.worldsGUI.data.WorldsRepository.BackupJob;
+import net.clanimg.worldsGUI.data.WorldsRepository.WorldBackupOverview;
 import net.clanimg.worldsGUI.guiconfig.GuiAction;
 import net.clanimg.worldsGUI.guiconfig.GuiConfig;
 import net.clanimg.worldsGUI.guiconfig.GuiDefinition;
@@ -120,6 +127,7 @@ public final class GuiManager {
         "trusted-friends",
         "select-friend",
         "edit-friend",
+        "world-backups",
         "tickets",
         "archived-tickets"
     );
@@ -173,6 +181,7 @@ public final class GuiManager {
     private volatile GuiConfig guiConfig;
     private final PlayerSessionManager playerSessions = new PlayerSessionManager();
     private final TriggerDispatcher triggerDispatcher;
+    private final BackupService backupService;
 
     public GuiManager(WorldsGUI plugin, WorldsRepository repository) {
         this.plugin = plugin;
@@ -180,6 +189,7 @@ public final class GuiManager {
         this.worldKey = new NamespacedKey(plugin, "world_name");
         this.messagesConfig = loadMessagesConfig();
         this.worldDefaultsConfig = loadWorldDefaultsConfig();
+        this.backupService = new BackupService(plugin, repository, new BackupHooks());
         this.triggerDispatcher = new TriggerDispatcher(
             this::openGui,
             (player, command, chatFeedback) -> {
@@ -251,7 +261,18 @@ public final class GuiManager {
         deleteWorld(player, worldName);
     }
 
+    /** Startet die Backup-Warteschlange dieses Servers (nach dem Laden von guis.yml im onEnable). */
+    public void startBackupService() {
+        backupService.start();
+    }
+
+    /** Übernimmt geänderte backup-Werte aus config.yml nach /worldsgui reload. */
+    public void reloadBackupSettings() {
+        backupService.reload();
+    }
+
     public void shutdown() {
+        backupService.shutdown();
         selectedWorldByPlayer.clear();
         pendingInputs.clear();
         pendingDeleteByPlayer.clear();
@@ -357,7 +378,8 @@ public final class GuiManager {
             }
 
             String title = PlaceholderExpander.expand(titleTemplate, player, session, Map.of());
-            inventory.setItem(absolute, buildRuntimeItem(materialTemplate, title == null ? "" : title, player, session, Map.of()));
+            ItemStack item = buildRuntimeItem(materialTemplate, title == null ? "" : title, player, session, Map.of());
+            inventory.setItem(absolute, withRuntimeLore(item, slotDefinition.lore(), player, session, Map.of()));
 
             if (slotDefinition.action() != null) {
                 holder.putClickHandler(absolute, slotDefinition.action(), Map.of());
@@ -366,23 +388,45 @@ public final class GuiManager {
     }
 
     private void renderSlotRange(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player, PlayerGuiSession session) {
-        GuiSlotRangeDefinition range = definition.slotRange();
-        if (range == null) {
-            return;
-        }
+        for (GuiSlotRangeDefinition range : definition.slotRanges()) {
+            List<Map<String, String>> items = resolveSlotRangeItems(range, player, session);
+            int slotCount = range.to() - range.from() + 1;
+            for (int i = 0; i < slotCount; i++) {
+                int absolute = range.from() + i;
+                if (i >= items.size()) {
+                    if (range.emptyMaterial() != null && !range.emptyMaterial().isBlank()) {
+                        String emptyTitle = PlaceholderExpander.expand(range.emptyTitle(), player, session, Map.of());
+                        inventory.setItem(absolute, buildRuntimeItem(range.emptyMaterial(), emptyTitle == null ? "" : emptyTitle, player, session, Map.of()));
+                    }
+                    continue;
+                }
 
-        List<Map<String, String>> items = resolveSlotRangeItems(range, player, session);
-        int slotCount = range.to() - range.from() + 1;
-        for (int i = 0; i < slotCount && i < items.size(); i++) {
-            int absolute = range.from() + i;
-            Map<String, String> extra = items.get(i);
-            String title = PlaceholderExpander.expand(range.title(), player, session, extra);
-            inventory.setItem(absolute, buildRuntimeItem(range.material(), title == null ? "" : title, player, session, extra));
+                Map<String, String> extra = items.get(i);
+                String title = PlaceholderExpander.expand(range.title(), player, session, extra);
+                ItemStack item = buildRuntimeItem(range.material(), title == null ? "" : title, player, session, extra);
+                inventory.setItem(absolute, withRuntimeLore(item, range.lore(), player, session, extra));
 
-            if (range.action() != null) {
-                holder.putClickHandler(absolute, range.action(), extra);
+                if (range.action() != null) {
+                    holder.putClickHandler(absolute, range.action(), extra);
+                }
             }
         }
+    }
+
+    private ItemStack withRuntimeLore(ItemStack item, List<String> loreTemplates, Player player, PlayerGuiSession session, Map<String, String> extra) {
+        if (loreTemplates == null || loreTemplates.isEmpty()) {
+            return item;
+        }
+
+        List<Component> lore = new ArrayList<>();
+        for (String template : loreTemplates) {
+            String expanded = PlaceholderExpander.expand(template, player, session, extra);
+            lore.add(legacyLine(expanded == null ? "" : expanded));
+        }
+        ItemMeta meta = item.getItemMeta();
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
     }
 
     private void renderAutoContent(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player) {
@@ -463,7 +507,73 @@ public final class GuiManager {
             }
             return toPlayerSlotItems(players, filter, player.getName());
         }
+
+        if (source.toLowerCase(Locale.ROOT).startsWith("world-backups-")) {
+            return applySlotRangeFilter(resolveBackupSlotItems(source.toLowerCase(Locale.ROOT), player), filter);
+        }
         return List.of();
+    }
+
+    /**
+     * Quellen des Backup-GUIs (je Welt, neueste zuerst): world-backups-auto, world-backups-manual,
+     * world-backups-undo (Stand vor dem letzten Restore) sowie world-backups-restore-job und
+     * world-backups-backup-job (wartende/laufende Aufträge).
+     */
+    private List<Map<String, String>> resolveBackupSlotItems(String source, Player player) {
+        String worldName = resolveContextWorld(player);
+        if (worldName == null || worldName.isBlank()) {
+            return List.of();
+        }
+
+        Optional<WorldBackupOverview> overviewOpt = backupService.overview(worldName);
+        if (overviewOpt.isEmpty()) {
+            return List.of();
+        }
+        WorldBackupOverview overview = overviewOpt.get();
+
+        List<Map<String, String>> items = new ArrayList<>();
+        switch (source) {
+            case "world-backups-auto", "world-backups-manual", "world-backups-undo" -> {
+                String kind = source.substring("world-backups-".length());
+                for (BackupEntry entry : overview.backups()) {
+                    if (!entry.kind().equalsIgnoreCase(kind)) {
+                        continue;
+                    }
+                    Map<String, String> values = new LinkedHashMap<>();
+                    values.put("backup_id", Long.toString(entry.id()));
+                    values.put("backup_date", BackupFormat.date(entry.createdAt(), backupService.settings().displayZone()));
+                    values.put("backup_size", BackupFormat.size(entry.sizeBytes()));
+                    values.put("backup_age", BackupFormat.age(entry.createdAt()));
+                    values.put("backup_kind", backupKindLabel(entry.kind()));
+                    items.add(values);
+                }
+            }
+            case "world-backups-restore-job", "world-backups-backup-job" -> {
+                String jobType = source.equals("world-backups-restore-job") ? "restore" : "backup";
+                for (BackupJob job : overview.jobs()) {
+                    if (!job.jobType().equalsIgnoreCase(jobType)) {
+                        continue;
+                    }
+                    Map<String, String> values = new LinkedHashMap<>();
+                    values.put("job_id", Long.toString(job.id()));
+                    values.put("job_status", "queued".equalsIgnoreCase(job.status()) ? "In Warteschlange" : "Läuft gerade");
+                    values.put("job_kind", backupKindLabel(job.kind()));
+                    items.add(values);
+                }
+            }
+            default -> {
+                return List.of();
+            }
+        }
+        return items;
+    }
+
+    private String backupKindLabel(String kind) {
+        return switch (kind == null ? "" : kind.toLowerCase(Locale.ROOT)) {
+            case "manual" -> "Manuell";
+            case "undo" -> "Vor Wiederherstellung";
+            default -> "Automatisch";
+        };
     }
 
     private List<Map<String, String>> toPlayerSlotItems(List<String> players, String filter) {
@@ -538,7 +648,8 @@ public final class GuiManager {
         return material;
     }
 
-    private ItemStack buildRuntimeItem(String materialTemplate, String title, Player player, PlayerGuiSession session, Map<String, String> extra) {
+    private ItemStack buildRuntimeItem(String materialTemplate, String rawTitle, Player player, PlayerGuiSession session, Map<String, String> extra) {
+        String title = ChatColor.translateAlternateColorCodes('&', rawTitle == null ? "" : rawTitle);
         String token = materialTemplate == null ? "" : materialTemplate.trim();
         if ("%player_head%".equalsIgnoreCase(token)) {
             // %player_head% ist immer der Kopf des Spielers, der das GUI gerade geöffnet hat.
@@ -1470,6 +1581,160 @@ public final class GuiManager {
             return;
         }
         deleteWorld(player, worldName);
+    }
+
+    /**
+     * /nav my-world backup &lt;create|restore|delete|cancel|list&gt; &lt;world&gt; [id].
+     * Legt nur Aufträge in der Warteschlange an bzw. verwaltet Backups über die API; die eigentliche
+     * Arbeit erledigt der Server, auf dem die Welt liegt (siehe {@link BackupService}).
+     */
+    public void executeNavMyWorldBackup(Player player, String action, String worldName, String argument) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_BACKUP, true)) {
+            return;
+        }
+        if (!backupService.isEnabled()) {
+            sendWithPrefix(player, "backup.disabled", "Backups sind auf diesem Server deaktiviert.");
+            return;
+        }
+
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+
+        WorldEntry entry = entryOpt.get();
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return;
+        }
+        if (isTicketWorld(entry)) {
+            sendWithPrefix(player, "backup.not-available", "Für Ticket-Welten gibt es keine Backups.");
+            return;
+        }
+
+        switch (action.toLowerCase(Locale.ROOT)) {
+            case "create" -> reportBackupResult(
+                player,
+                backupService.requestManualBackup(worldName, player.getName()),
+                "backup.queued-backup",
+                "Backup für &f%world%&7 wurde eingereiht. Du wirst benachrichtigt, sobald es fertig ist.",
+                worldName
+            );
+            case "restore" -> {
+                Long backupId = parseBackupNumber(player, argument);
+                if (backupId != null) {
+                    reportBackupResult(
+                        player,
+                        backupService.requestRestore(worldName, backupId, player.getName()),
+                        "backup.queued-restore",
+                        "Wiederherstellung von &f%world%&7 wurde eingereiht. Die Welt ist dabei kurz nicht erreichbar, du wirst benachrichtigt.",
+                        worldName
+                    );
+                }
+            }
+            case "delete" -> {
+                Long backupId = parseBackupNumber(player, argument);
+                if (backupId != null) {
+                    reportBackupResult(
+                        player,
+                        backupService.deleteBackup(worldName, backupId),
+                        "backup.deleted",
+                        "Das Backup wurde gelöscht.",
+                        worldName
+                    );
+                }
+            }
+            case "cancel" -> {
+                Long jobId = parseBackupNumber(player, argument);
+                if (jobId != null) {
+                    reportBackupResult(
+                        player,
+                        backupService.cancelJob(worldName, jobId),
+                        "backup.cancelled",
+                        "Der Auftrag wurde abgebrochen.",
+                        worldName
+                    );
+                }
+            }
+            case "list" -> sendBackupList(player, worldName);
+            default -> sendWithPrefix(player, "usage.nav.my-world.backup", "Usage: /nav my-world backup <create|restore|delete|cancel|list> <world-name> [id]");
+        }
+    }
+
+    private Long parseBackupNumber(Player player, String raw) {
+        try {
+            return Long.parseLong(raw == null ? "" : raw.trim());
+        } catch (NumberFormatException ex) {
+            sendWithPrefix(player, "backup.invalid-id", "Ungültige Backup- bzw. Auftrags-ID.");
+            return null;
+        }
+    }
+
+    private void reportBackupResult(Player player, BackupApiResult result, String successKey, String successFallback, String worldName) {
+        if (result.ok()) {
+            sendWithPrefix(player, successKey, successFallback, "%world%", worldName);
+            return;
+        }
+
+        switch (result.detail()) {
+            case "manual-limit" -> sendWithPrefix(
+                player,
+                "backup.manual-limit",
+                "&cDu hast bereits %limit% manuelle Backups. Lösche zuerst eins (Rechtsklick im Backup-Menü).",
+                "%limit%",
+                String.valueOf(backupService.overview(worldName).map(WorldBackupOverview::manualLimit).orElse(7))
+            );
+            case "already-queued" -> sendWithPrefix(player, "backup.already-queued", "&eFür diese Welt wartet oder läuft bereits ein solcher Auftrag.");
+            case "backup-not-found" -> sendWithPrefix(player, "backup.not-found", "&cDieses Backup existiert nicht (mehr).");
+            case "backup-in-use" -> sendWithPrefix(player, "backup.in-use", "&cDieses Backup wird gerade für eine Wiederherstellung gebraucht.");
+            case "not-cancellable" -> sendWithPrefix(player, "backup.not-cancellable", "&eDer Auftrag läuft bereits und kann nicht mehr abgebrochen werden.");
+            case "world-not-found", "world-archived" -> send(player, "world-not-found");
+            case "api-unreachable" -> sendWithPrefix(player, "backup.api-unreachable", "&cDie Backup-API ist gerade nicht erreichbar.");
+            default -> sendWithPrefix(
+                player,
+                "backup.failed",
+                "&cDie Aktion ist fehlgeschlagen (HTTP %status%).",
+                "%status%",
+                String.valueOf(result.statusCode())
+            );
+        }
+    }
+
+    private void sendBackupList(Player player, String worldName) {
+        Optional<WorldBackupOverview> overviewOpt = backupService.overview(worldName);
+        if (overviewOpt.isEmpty()) {
+            sendWithPrefix(player, "backup.api-unreachable", "&cDie Backup-API ist gerade nicht erreichbar.");
+            return;
+        }
+
+        WorldBackupOverview overview = overviewOpt.get();
+        if (overview.backups().isEmpty()) {
+            sendWithPrefix(player, "backup.list-empty", "Für &f%world%&7 gibt es noch keine Backups.", "%world%", worldName);
+        } else {
+            sendWithPrefix(player, "backup.list-header", "Backups von &f%world%&7 (neueste zuerst):", "%world%", worldName);
+            for (BackupEntry entry : overview.backups()) {
+                sendNoPrefixConfigured(
+                    player,
+                    "backup.list-entry",
+                    "&8- &7#%id% &f%date% &8(&7%kind%, %size%&8)",
+                    "%id%", Long.toString(entry.id()),
+                    "%date%", BackupFormat.date(entry.createdAt(), backupService.settings().displayZone()),
+                    "%kind%", backupKindLabel(entry.kind()),
+                    "%size%", BackupFormat.size(entry.sizeBytes())
+                );
+            }
+        }
+        for (BackupJob job : overview.jobs()) {
+            sendNoPrefixConfigured(
+                player,
+                "backup.list-job",
+                "&8- &7Auftrag #%id%: &f%type% &8(&7%status%&8)",
+                "%id%", Long.toString(job.id()),
+                "%type%", "restore".equalsIgnoreCase(job.jobType()) ? "Wiederherstellung" : "Backup",
+                "%status%", "queued".equalsIgnoreCase(job.status()) ? "In Warteschlange" : "Läuft gerade"
+            );
+        }
     }
 
     public void executeNavMyWorldOpen(Player player, String worldName) {
@@ -3542,6 +3807,8 @@ public final class GuiManager {
                     plugin.getLogger().warning("Weltordner konnte nicht gelöscht werden (" + worldName + "): " + ex.getMessage());
                 }
             }
+            // Reste eines Restores (Temp-Ordner, vorheriger Stand) gehören zur gelöschten Welt.
+            backupService.cleanupLeftovers(worldName);
 
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!isWorldReallyDeleted(worldName)) {
@@ -3841,9 +4108,20 @@ public final class GuiManager {
     }
 
     private void sendPlayerToLobby(Player player, String deletingWorldName) {
+        sendPlayerToLobby(
+            player,
+            deletingWorldName,
+            "delete-lobby-transfer",
+            "Die Welt &f%world% &7wird gelöscht. Du wirst zur Lobby verbunden ...",
+            "delete-kick-reason",
+            "Diese Welt wurde gelöscht."
+        );
+    }
+
+    private void sendPlayerToLobby(Player player, String deletingWorldName, String transferKey, String transferFallback, String kickKey, String kickFallback) {
         String lobbyServer = resolveLobbyServerId();
         if (lobbyServer == null || lobbyServer.isBlank()) {
-            player.kickPlayer(configuredMessageLine("delete-kick-reason", "Diese Welt wurde gelöscht."));
+            player.kickPlayer(configuredMessageLine(kickKey, kickFallback));
             return;
         }
 
@@ -3851,7 +4129,7 @@ public final class GuiManager {
         String networkId = plugin.getConfig().getString("simplecloud.network-id", "");
         String networkSecret = plugin.getConfig().getString("simplecloud.network-secret", "");
         if (controllerUrl == null || controllerUrl.isBlank() || networkId == null || networkId.isBlank() || networkSecret == null || networkSecret.isBlank()) {
-            player.kickPlayer(configuredMessageLine("delete-kick-reason", "Diese Welt wurde gelöscht."));
+            player.kickPlayer(configuredMessageLine(kickKey, kickFallback));
             return;
         }
 
@@ -3879,20 +4157,140 @@ public final class GuiManager {
                     }
 
                     if (response.statusCode() / 100 == 2) {
-                        send(online, "delete-lobby-transfer", "%world%", deletingWorldName);
+                        sendWithPrefix(online, transferKey, transferFallback, "%world%", deletingWorldName);
                     } else {
-                        online.kickPlayer(configuredMessageLine("delete-kick-reason", "Diese Welt wurde gelöscht."));
+                        online.kickPlayer(configuredMessageLine(kickKey, kickFallback));
                     }
                 });
             } catch (Exception ex) {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     Player online = Bukkit.getPlayer(player.getUniqueId());
                     if (online != null && online.isOnline()) {
-                        online.kickPlayer(configuredMessageLine("delete-kick-reason", "Diese Welt wurde gelöscht."));
+                        online.kickPlayer(configuredMessageLine(kickKey, kickFallback));
                     }
                 });
             }
         });
+    }
+
+    /** Wie {@link #evacuatePlayersFromWorld(String)}, aber mit Texten für eine Wiederherstellung aus einem Backup. */
+    private void evacuatePlayersForRestore(String worldName) {
+        World target = Bukkit.getWorld(worldName);
+        if (target == null) {
+            return;
+        }
+
+        for (Player affected : new ArrayList<>(target.getPlayers())) {
+            World ownFallback = resolveNextOwnWorld(affected, worldName);
+            if (ownFallback == null) {
+                sendPlayerToLobby(
+                    affected,
+                    worldName,
+                    "backup.restore-lobby-transfer",
+                    "Die Welt &f%world% &7wird aus einem Backup wiederhergestellt. Du wirst zur Lobby verbunden ...",
+                    "backup.restore-kick-reason",
+                    "Diese Welt wird gerade aus einem Backup wiederhergestellt."
+                );
+                continue;
+            }
+
+            affected.teleport(ownFallback.getSpawnLocation());
+            sendWithPrefix(
+                affected,
+                "backup.restore-evacuated",
+                "Diese Welt wird gerade aus einem Backup wiederhergestellt. Du wurdest in &f%fallback_world% &7teleportiert.",
+                "%fallback_world%",
+                ownFallback.getName()
+            );
+        }
+    }
+
+    /** Bukkit-Zugriffe des Backup-Dienstes; wird immer auf dem Hauptthread aufgerufen. */
+    private final class BackupHooks implements BackupWorldHooks {
+        @Override
+        public String localServerName() {
+            return resolveLocalServerId();
+        }
+
+        @Override
+        public Boolean pauseAutoSave(String worldName) {
+            World world = Bukkit.getWorld(worldName);
+            if (world == null) {
+                return null;
+            }
+            world.save();
+            boolean previous = world.isAutoSave();
+            world.setAutoSave(false);
+            return previous;
+        }
+
+        @Override
+        public void resumeAutoSave(String worldName, boolean previousState) {
+            World world = Bukkit.getWorld(worldName);
+            if (world != null) {
+                world.setAutoSave(previousState);
+            }
+        }
+
+        @Override
+        public boolean unloadWorldForRestore(String worldName) {
+            World world = Bukkit.getWorld(worldName);
+            if (world == null) {
+                return true;
+            }
+
+            evacuatePlayersForRestore(worldName);
+            if (!world.getPlayers().isEmpty()) {
+                // Der Lobby-Transfer läuft asynchron; der Dienst versucht es in ein paar Sekunden erneut.
+                return false;
+            }
+
+            world.save();
+            Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
+            if (mvCore != null && mvCore.isEnabled()) {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv unload " + worldName);
+            }
+            World stillLoaded = Bukkit.getWorld(worldName);
+            if (stillLoaded != null && !Bukkit.unloadWorld(stillLoaded, true)) {
+                return false;
+            }
+            return Bukkit.getWorld(worldName) == null;
+        }
+
+        @Override
+        public boolean loadWorld(String worldName) {
+            if (Bukkit.getWorld(worldName) != null) {
+                return true;
+            }
+            Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
+            if (mvCore != null && mvCore.isEnabled()) {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+            }
+            return Bukkit.getWorld(worldName) != null;
+        }
+
+        @Override
+        public void refreshWorldProtection(String worldName) {
+            refreshWorldGuardProtection(worldName);
+        }
+
+        @Override
+        public void notifyJobResult(Player player, BackupJob job) {
+            String worldName = job.worldName();
+            if (!"done".equalsIgnoreCase(job.status())) {
+                sendWithPrefix(
+                    player,
+                    "backup.result.failed",
+                    "&cDer Backup-Auftrag für &f%world%&c ist fehlgeschlagen: &f%reason%",
+                    "%world%", worldName,
+                    "%reason%", job.message() == null || job.message().isBlank() ? "unbekannter Fehler" : job.message()
+                );
+            } else if ("restore".equalsIgnoreCase(job.jobType())) {
+                sendWithPrefix(player, "backup.result.restore-done", "Die Welt &f%world%&7 wurde aus dem Backup wiederhergestellt.", "%world%", worldName);
+            } else {
+                sendWithPrefix(player, "backup.result.backup-done", "Das Backup von &f%world%&7 ist fertig.", "%world%", worldName);
+            }
+        }
     }
 
     private void setWorldPublic(Player player, String worldName, boolean isPublic, String permission) {
@@ -3991,6 +4389,13 @@ public final class GuiManager {
 
     private boolean joinWorldLocally(Player player, WorldEntry entry, boolean notify) {
         String worldName = entry.worldName();
+        if (backupService.isWorldBusy(worldName)) {
+            // Während eines Restore darf die Welt weder betreten noch (per mv load) neu geladen werden.
+            if (notify) {
+                sendWithPrefix(player, "backup.world-busy", "&eDiese Welt wird gerade aus einem Backup wiederhergestellt. Bitte warte einen Moment.");
+            }
+            return false;
+        }
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);

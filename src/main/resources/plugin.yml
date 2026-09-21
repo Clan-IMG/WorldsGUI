@@ -110,6 +110,9 @@ permissions:
   worldsgui.command.nav.my-world.import:
     description: Erlaubt /nav my-world import <world-name> <player>
     default: op
+  worldsgui.command.nav.my-world.backup:
+    description: Erlaubt /nav my-world backup <create|restore|delete|cancel|list> <world-name> [id] (Backups der eigenen Welt)
+    default: op
   worldsgui.command.nav.setspawn:
     description: Erlaubt /nav setspawn
     default: op

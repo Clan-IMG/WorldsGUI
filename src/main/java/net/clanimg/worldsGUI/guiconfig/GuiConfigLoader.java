@@ -28,7 +28,7 @@ import org.bukkit.plugin.java.JavaPlugin;
  */
 public final class GuiConfigLoader {
     private static final Pattern ROW_SLOT_KEY = Pattern.compile("^slot-([1-9])$");
-    private static final String SLOT_RANGE_KEY = "slot-range";
+    private static final Pattern SLOT_RANGE_KEY_PATTERN = Pattern.compile("^slot-range(-[A-Za-z0-9_-]+)?$", Pattern.CASE_INSENSITIVE);
     private static final String DEFAULT_MATERIAL = "GRAY_STAINED_GLASS_PANE";
 
     private GuiConfigLoader() {
@@ -103,7 +103,7 @@ public final class GuiConfigLoader {
         String title = section.getString("title", "");
 
         Map<Integer, GuiSlotDefinition> rowSlots = new LinkedHashMap<>();
-        GuiSlotRangeDefinition slotRange = null;
+        Map<String, GuiSlotRangeDefinition> slotRanges = new LinkedHashMap<>();
 
         ConfigurationSection slotsSection = section.getConfigurationSection("slots");
         if (slotsSection != null) {
@@ -121,8 +121,11 @@ public final class GuiConfigLoader {
                     if (slotDefinition != null) {
                         rowSlots.put(rowSlot, slotDefinition);
                     }
-                } else if (key.equalsIgnoreCase(SLOT_RANGE_KEY)) {
-                    slotRange = parseSlotRange(guiId, entrySection, size, errors, warnings);
+                } else if (SLOT_RANGE_KEY_PATTERN.matcher(key).matches()) {
+                    GuiSlotRangeDefinition slotRange = parseSlotRange(guiId, key, entrySection, size, errors, warnings);
+                    if (slotRange != null) {
+                        slotRanges.put(key, slotRange);
+                    }
                 } else {
                     warnings.add("GUI '" + guiId + "': unbekannter Slot-Schlüssel '" + key + "' wird ignoriert.");
                 }
@@ -163,12 +166,13 @@ public final class GuiConfigLoader {
 
         String returnGuiId = section.getString("return-gui-id");
 
-        return new GuiDefinition(guiId, size, title, position, rowSlots, slotRange, autoContentSource, returnGuiId);
+        return new GuiDefinition(guiId, size, title, position, rowSlots, new ArrayList<>(slotRanges.values()), autoContentSource, returnGuiId);
     }
 
     private static GuiSlotDefinition parseSlot(String guiId, String slotKey, ConfigurationSection section, List<String> errors, List<String> warnings) {
         String material = section.getString("material", DEFAULT_MATERIAL);
         String title = section.getString("title", "");
+        List<String> lore = section.getStringList("lore");
         GuiAction action = null;
 
         ConfigurationSection actionSection = section.getConfigurationSection("action");
@@ -176,23 +180,23 @@ public final class GuiConfigLoader {
             action = parseAction(guiId, slotKey, actionSection, errors, warnings);
         }
 
-        return new GuiSlotDefinition(material, title, action);
+        return new GuiSlotDefinition(material, title, lore, action);
     }
 
-    private static GuiSlotRangeDefinition parseSlotRange(String guiId, ConfigurationSection section, int guiSize, List<String> errors, List<String> warnings) {
+    private static GuiSlotRangeDefinition parseSlotRange(String guiId, String rangeKey, ConfigurationSection section, int guiSize, List<String> errors, List<String> warnings) {
         int from = section.getInt("from", -1);
         int to = section.getInt("to", -1);
 
         if (from < 0 || to < 0) {
-            errors.add("GUI '" + guiId + "': slot-range benötigt 'from' und 'to'.");
+            errors.add("GUI '" + guiId + "': " + rangeKey + " benötigt 'from' und 'to'.");
             return null;
         }
         if (from > to) {
-            errors.add("GUI '" + guiId + "': slot-range 'from' (" + from + ") ist größer als 'to' (" + to + ").");
+            errors.add("GUI '" + guiId + "': " + rangeKey + " 'from' (" + from + ") ist größer als 'to' (" + to + ").");
             return null;
         }
         if (to >= guiSize) {
-            errors.add("GUI '" + guiId + "': slot-range " + from + "-" + to + " liegt außerhalb der gui-size " + guiSize + ".");
+            errors.add("GUI '" + guiId + "': " + rangeKey + " " + from + "-" + to + " liegt außerhalb der gui-size " + guiSize + ".");
             return null;
         }
 
@@ -200,14 +204,17 @@ public final class GuiConfigLoader {
         String filter = section.getString("filter");
         String material = section.getString("material", DEFAULT_MATERIAL);
         String title = section.getString("title", "");
+        List<String> lore = section.getStringList("lore");
+        String emptyMaterial = section.getString("empty-material");
+        String emptyTitle = section.getString("empty-title", "");
         GuiAction action = null;
 
         ConfigurationSection actionSection = section.getConfigurationSection("action");
         if (actionSection != null) {
-            action = parseAction(guiId, SLOT_RANGE_KEY, actionSection, errors, warnings);
+            action = parseAction(guiId, rangeKey, actionSection, errors, warnings);
         }
 
-        return new GuiSlotRangeDefinition(from, to, source, filter, material, title, action);
+        return new GuiSlotRangeDefinition(from, to, source, filter, material, title, lore, emptyMaterial, emptyTitle, action);
     }
 
     private static GuiAction parseAction(String guiId, String slotKey, ConfigurationSection actionSection, List<String> errors, List<String> warnings) {
@@ -375,13 +382,16 @@ public final class GuiConfigLoader {
         for (GuiDefinition gui : guis.values()) {
             checkOverlap(gui, errors);
             checkGuiReferences(gui, gui.rowSlots().values().stream(), guis, errors, "slot-1..9");
-            if (gui.slotRange() != null && gui.slotRange().action() != null) {
+            for (GuiSlotRangeDefinition range : gui.slotRanges()) {
+                if (range.action() == null) {
+                    continue;
+                }
                 checkGuiReferences(
                     gui,
-                    Stream.of(new GuiSlotDefinition(null, null, gui.slotRange().action())),
+                    Stream.of(new GuiSlotDefinition(null, null, range.action())),
                     guis,
                     errors,
-                    "slot-range"
+                    "slot-range " + range.from() + "-" + range.to()
                 );
             }
             if (gui.returnGuiId() != null && !gui.returnGuiId().isBlank()
@@ -392,9 +402,7 @@ public final class GuiConfigLoader {
     }
 
     private static void checkOverlap(GuiDefinition gui, List<String> errors) {
-        if (gui.slotRange() == null || gui.rowSlots().isEmpty()) {
-            return;
-        }
+        List<GuiSlotRangeDefinition> ranges = gui.slotRanges();
 
         for (Integer rowSlot : gui.rowSlots().keySet()) {
             int absolute;
@@ -403,11 +411,26 @@ public final class GuiConfigLoader {
             } catch (IllegalArgumentException ex) {
                 continue;
             }
-            if (absolute >= gui.slotRange().from() && absolute <= gui.slotRange().to()) {
-                errors.add(
-                    "GUI '" + gui.id() + "': slot-" + rowSlot + " (absoluter Slot " + absolute + ") überschneidet sich mit slot-range "
-                        + gui.slotRange().from() + "-" + gui.slotRange().to() + "."
-                );
+            for (GuiSlotRangeDefinition range : ranges) {
+                if (absolute >= range.from() && absolute <= range.to()) {
+                    errors.add(
+                        "GUI '" + gui.id() + "': slot-" + rowSlot + " (absoluter Slot " + absolute + ") überschneidet sich mit slot-range "
+                            + range.from() + "-" + range.to() + "."
+                    );
+                }
+            }
+        }
+
+        for (int i = 0; i < ranges.size(); i++) {
+            for (int j = i + 1; j < ranges.size(); j++) {
+                GuiSlotRangeDefinition first = ranges.get(i);
+                GuiSlotRangeDefinition second = ranges.get(j);
+                if (first.from() <= second.to() && second.from() <= first.to()) {
+                    errors.add(
+                        "GUI '" + gui.id() + "': slot-range " + first.from() + "-" + first.to() + " überschneidet sich mit slot-range "
+                            + second.from() + "-" + second.to() + "."
+                    );
+                }
             }
         }
     }

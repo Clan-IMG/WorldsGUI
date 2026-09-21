@@ -1,5 +1,6 @@
 package net.clanimg.worldsGUI.guiconfig;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -11,7 +12,7 @@ public final class GuiDefinition {
     private final String title;
     private final GuiPosition position;
     private final Map<Integer, GuiSlotDefinition> rowSlots;
-    private final GuiSlotRangeDefinition slotRange;
+    private final List<GuiSlotRangeDefinition> slotRanges;
     private final String autoContentSource;
     private final String returnGuiId;
 
@@ -21,7 +22,7 @@ public final class GuiDefinition {
         String title,
         GuiPosition position,
         Map<Integer, GuiSlotDefinition> rowSlots,
-        GuiSlotRangeDefinition slotRange,
+        List<GuiSlotRangeDefinition> slotRanges,
         String autoContentSource,
         String returnGuiId
     ) {
@@ -30,7 +31,7 @@ public final class GuiDefinition {
         this.title = title;
         this.position = position;
         this.rowSlots = rowSlots == null ? Map.of() : Map.copyOf(rowSlots);
-        this.slotRange = slotRange;
+        this.slotRanges = slotRanges == null ? List.of() : List.copyOf(slotRanges);
         this.autoContentSource = autoContentSource;
         this.returnGuiId = returnGuiId;
     }
@@ -56,8 +57,13 @@ public final class GuiDefinition {
         return rowSlots;
     }
 
-    public GuiSlotRangeDefinition slotRange() {
-        return slotRange;
+    /**
+     * Alle "slot-range"-Blöcke dieses GUIs in der Reihenfolge der Datei. Neben "slot-range" sind
+     * weitere Bereiche mit Suffix erlaubt (z.B. "slot-range-manual"), damit ein GUI mehrere
+     * dynamische Listen (z.B. Auto- und manuelle Backups) darstellen kann.
+     */
+    public List<GuiSlotRangeDefinition> slotRanges() {
+        return slotRanges;
     }
 
     /**

@@ -73,7 +73,7 @@ public final class NavCommand implements TabExecutor {
             }
             case "my-world", "my-worlds" -> {
                 if (args.length < 2) {
-                    guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...", "%label%", label);
+                    guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon|backup> ...", "%label%", label);
                     return true;
                 }
                 String myWorldSub = args[1].toLowerCase(Locale.ROOT);
@@ -175,8 +175,17 @@ public final class NavCommand implements TabExecutor {
                         guiManager.executeNavMyWorldImport(player, args[2], args[3]);
                         return true;
                     }
+                    case "backup" -> {
+                        if (args.length < 4) {
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.backup", "Usage: /nav my-world backup <create|restore|delete|cancel|list> <world-name> [id]", "%label%", label);
+                            return true;
+                        }
+                        String backupArgument = args.length >= 5 ? args[4] : null;
+                        guiManager.executeNavMyWorldBackup(player, args[2], args[3], backupArgument);
+                        return true;
+                    }
                     default -> {
-                        guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon> ...", "%label%", label);
+                        guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon|backup> ...", "%label%", label);
                         return true;
                     }
                 }
@@ -286,7 +295,20 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 2 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))) {
-            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "invite", "remove", "trust", "untrust", "rename", "icon"), args[1]);
+            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "invite", "remove", "trust", "untrust", "rename", "icon", "backup"), args[1]);
+        }
+
+        if (args.length >= 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("backup")) {
+            if (args.length == 3) {
+                return filterPrefix(List.of("create", "restore", "delete", "cancel", "list"), args[2]);
+            }
+            if (args.length == 4) {
+                return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[3]);
+            }
+            if (args.length == 5 && !args[2].equalsIgnoreCase("create") && !args[2].equalsIgnoreCase("list")) {
+                return List.of("<id>");
+            }
+            return List.of();
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("customer")) {

@@ -16,6 +16,7 @@ api:
   blocked-server-names:
     - "lobby-1"
     - "lobby-2"
+    - "plotwelt"
 
   # Optional override für die lokale Server-ID.
   # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
@@ -35,6 +36,43 @@ simplecloud:
   network-id: ""
   network-secret: ""
   lobby-server-id: "lobby-1"
+
+backup:
+  # Welt-Backups über Cloudflare R2, verwaltet von der worldsgui-api.
+  # Jeder Server sichert und stellt nur Welten wieder her, die auf ihm liegen. Alle Aufträge
+  # (nächtliches Auto-Backup, manuelle Backups, Wiederherstellungen) liegen dauerhaft in der
+  # API-Warteschlange. Ist ein Server gerade offline oder wird neu gestartet, wird der Auftrag
+  # später nachgeholt bzw. fortgesetzt - es geht nichts verloren.
+  # Uhrzeit des Auto-Backups (Standard 00:00 Uhr), Aufbewahrung (Standard 7 Tage) und die
+  # R2-Zugangsdaten werden NICHT hier, sondern in der worldsgui-api (Coolify-Umgebung) gesetzt.
+  enabled: true
+
+  # Wie oft dieser Server nach neuen Aufträgen fragt (Sekunden, mindestens 5).
+  poll-interval-seconds: 10
+
+  # Wie oft ein laufender Auftrag "ich arbeite noch daran" meldet (10-120 Sekunden).
+  # Meldet sich ein Server länger als 5 Minuten nicht, setzt die API den Auftrag zurück in die Warteschlange.
+  heartbeat-interval-seconds: 30
+
+  # Wie oft nach fertigen Aufträgen gesucht wird, um den anfragenden Spieler zu informieren (Sekunden).
+  notify-interval-seconds: 10
+
+  # Wie viele Aufträge dieser Server gleichzeitig ausführt (1-4). Backups laufen immer eine Welt nach der anderen,
+  # 1 schont Festplatte und Arbeitsspeicher.
+  max-parallel-jobs: 1
+
+  # Mindestgröße eines Upload-Teils in MB (5-256). Größere Welten verwenden automatisch größere Teile.
+  # Pro laufendem Auftrag wird ein Teil im Arbeitsspeicher gehalten.
+  min-part-size-mb: 16
+
+  # Zip-Kompression (1 = schnell, 9 = kleinste Dateien).
+  compression-level: 6
+
+  # Wie oft ein einzelner Upload-Teil bei Fehlern wiederholt wird (1-10).
+  part-upload-retries: 5
+
+  # Zeitzone für die im GUI angezeigten Backup-Zeiten.
+  display-timezone: "Europe/Berlin"
 
 hoover-dialog:
   title: "&r&b%displayname%"

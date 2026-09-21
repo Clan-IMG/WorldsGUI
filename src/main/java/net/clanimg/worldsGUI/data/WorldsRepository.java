@@ -617,6 +617,222 @@ public final class WorldsRepository {
         patchOrWarn("/worlds/join-requests/" + id, body);
     }
 
+    // ------------------------------------------------------------------
+    // Welt-Backups (API-Endpunkte unter /world-backups)
+    // ------------------------------------------------------------------
+
+    public Optional<WorldBackupOverview> loadBackupOverview(String worldName) {
+        try {
+            ApiResponse response = request("GET", "/world-backups/" + encode(worldName), null);
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("backup-overview", "Backup-Übersicht API Fehler: HTTP " + response.statusCode());
+                return Optional.empty();
+            }
+
+            JsonObject json = parseObject(response.body());
+            List<BackupEntry> backups = new ArrayList<>();
+            for (JsonObject row : objectRows(json, "backups")) {
+                backups.add(new BackupEntry(
+                    getLong(row, "id", 0L),
+                    getString(row, "kind", "auto"),
+                    getLong(row, "sizeBytes", 0L),
+                    getString(row, "createdAt", ""),
+                    getString(row, "sha256", "")
+                ));
+            }
+            List<BackupJob> jobs = new ArrayList<>();
+            for (JsonObject row : objectRows(json, "jobs")) {
+                jobs.add(mapBackupJob(row));
+            }
+            return Optional.of(new WorldBackupOverview(getInt(json, "manualLimit", 7), backups, jobs));
+        } catch (Exception ex) {
+            warnThrottled("backup-overview-ex", "Fehler beim Laden der Backups via API: " + ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public BackupApiResult createBackupJob(String worldName, String jobType, Long backupId, String requestedBy) {
+        JsonObject body = new JsonObject();
+        body.addProperty("worldName", worldName);
+        body.addProperty("jobType", jobType);
+        if (backupId != null) {
+            body.addProperty("backupId", backupId);
+        }
+        if (requestedBy != null) {
+            body.addProperty("requestedBy", requestedBy);
+        }
+        return backupCall("POST", "/world-backups/jobs", body);
+    }
+
+    public BackupApiResult cancelBackupJob(long jobId, String worldName) {
+        return backupCall("POST", "/world-backups/jobs/" + jobId + "/cancel?worldName=" + encode(worldName), new JsonObject());
+    }
+
+    public BackupApiResult deleteBackup(long backupId, String worldName) {
+        return backupCall("DELETE", "/world-backups/items/" + backupId + "?worldName=" + encode(worldName), null);
+    }
+
+    public List<BackupJob> claimBackupJobs(String serverName, int limit) {
+        JsonObject body = new JsonObject();
+        body.addProperty("serverName", serverName);
+        body.addProperty("limit", Math.max(1, limit));
+        return backupJobList(backupCall("POST", "/world-backups/jobs/claim", body), "claim");
+    }
+
+    public List<BackupJob> listUnnotifiedBackupJobs(int limit) {
+        return backupJobList(backupCall("GET", "/world-backups/jobs/unnotified?limit=" + Math.max(1, limit), null), "unnotified");
+    }
+
+    public void markBackupJobNotified(long jobId) {
+        backupCall("POST", "/world-backups/jobs/" + jobId + "/notified", new JsonObject());
+    }
+
+    public JobHeartbeat heartbeatBackupJob(long jobId, String serverName, String phase) {
+        JsonObject body = new JsonObject();
+        body.addProperty("serverName", serverName);
+        if (phase != null) {
+            body.addProperty("phase", phase);
+        }
+        BackupApiResult result = backupCall("POST", "/world-backups/jobs/" + jobId + "/heartbeat", body);
+        if (!result.ok()) {
+            // API nicht erreichbar oder Fehler: weiterarbeiten, der Server-Heartbeat holt sich später wieder ein.
+            return new JobHeartbeat(false, true);
+        }
+        return new JobHeartbeat(true, result.json().has("owned") && result.json().get("owned").getAsBoolean());
+    }
+
+    public boolean finishBackupJob(long jobId, String serverName, boolean success, String message) {
+        JsonObject body = new JsonObject();
+        body.addProperty("serverName", serverName);
+        body.addProperty("success", success);
+        if (message != null) {
+            body.addProperty("message", abbreviate(message, 250));
+        }
+        return backupCall("POST", "/world-backups/jobs/" + jobId + "/finish", body).ok();
+    }
+
+    public BackupStartResult startBackupUpload(String worldName, String kind, String serverName, long partSizeBytes, String fingerprint) {
+        JsonObject body = new JsonObject();
+        body.addProperty("kind", kind);
+        body.addProperty("serverName", serverName);
+        body.addProperty("partSizeBytes", partSizeBytes);
+        if (fingerprint != null) {
+            body.addProperty("fingerprint", fingerprint);
+        }
+        BackupApiResult result = backupCall("POST", "/world-backups/" + encode(worldName) + "/start", body);
+        if (!result.ok()) {
+            return new BackupStartResult(false, false, 0L, result.detail());
+        }
+        boolean skipped = getBoolean(result.json(), "skipped", false);
+        return new BackupStartResult(true, skipped, getLong(result.json(), "backupId", 0L), "");
+    }
+
+    public Optional<String> requestBackupPartUrl(long backupId, int partNumber) {
+        JsonObject body = new JsonObject();
+        body.addProperty("partNumber", partNumber);
+        BackupApiResult result = backupCall("POST", "/world-backups/items/" + backupId + "/part-url", body);
+        if (!result.ok()) {
+            return Optional.empty();
+        }
+        String url = getString(result.json(), "url", "");
+        return url.isBlank() ? Optional.empty() : Optional.of(url);
+    }
+
+    public boolean completeBackupUpload(long backupId, List<BackupPart> parts, long sizeBytes, String sha256) {
+        JsonArray partValues = new JsonArray();
+        for (BackupPart part : parts) {
+            JsonObject partJson = new JsonObject();
+            partJson.addProperty("partNumber", part.partNumber());
+            partJson.addProperty("etag", part.etag());
+            partValues.add(partJson);
+        }
+        JsonObject body = new JsonObject();
+        body.add("parts", partValues);
+        body.addProperty("sizeBytes", sizeBytes);
+        body.addProperty("sha256", sha256);
+        return backupCall("POST", "/world-backups/items/" + backupId + "/complete", body).ok();
+    }
+
+    public void abortBackupUpload(long backupId) {
+        backupCall("POST", "/world-backups/items/" + backupId + "/abort", new JsonObject());
+    }
+
+    public Optional<BackupDownload> requestBackupDownload(long backupId) {
+        BackupApiResult result = backupCall("POST", "/world-backups/items/" + backupId + "/download", new JsonObject());
+        if (!result.ok()) {
+            return Optional.empty();
+        }
+        String url = getString(result.json(), "url", "");
+        if (url.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(new BackupDownload(
+            url,
+            getLong(result.json(), "sizeBytes", 0L),
+            getString(result.json(), "sha256", "")
+        ));
+    }
+
+    private BackupApiResult backupCall(String method, String path, JsonObject body) {
+        try {
+            ApiResponse response = request(method, path, body == null ? null : gson.toJson(body));
+            return new BackupApiResult(response.statusCode(), parseObject(response.body()));
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return new BackupApiResult(0, detailObject("interrupted"));
+        } catch (Exception ex) {
+            warnThrottled("backup-call:" + path.replaceAll("\\d+", "#"), method + " " + path + " fehlgeschlagen: " + ex.getMessage());
+            return new BackupApiResult(0, detailObject("api-unreachable"));
+        }
+    }
+
+    private List<BackupJob> backupJobList(BackupApiResult result, String label) {
+        List<BackupJob> jobs = new ArrayList<>();
+        if (!result.ok()) {
+            if (result.statusCode() != 0) {
+                warnThrottled("backup-jobs:" + label, "Backup-Aufträge (" + label + ") API Fehler: HTTP " + result.statusCode());
+            }
+            return jobs;
+        }
+        for (JsonObject row : objectRows(result.json(), "jobs")) {
+            jobs.add(mapBackupJob(row));
+        }
+        return jobs;
+    }
+
+    private BackupJob mapBackupJob(JsonObject row) {
+        return new BackupJob(
+            getLong(row, "id", 0L),
+            getString(row, "worldName", ""),
+            getString(row, "jobType", "backup"),
+            getString(row, "kind", "auto"),
+            getLong(row, "backupId", 0L),
+            getNullableString(row, "requestedBy"),
+            getString(row, "status", "queued"),
+            getNullableString(row, "message"),
+            getInt(row, "attempts", 0)
+        );
+    }
+
+    private List<JsonObject> objectRows(JsonObject json, String key) {
+        List<JsonObject> rows = new ArrayList<>();
+        if (!json.has(key) || !json.get(key).isJsonArray()) {
+            return rows;
+        }
+        for (JsonElement element : json.getAsJsonArray(key)) {
+            if (element.isJsonObject()) {
+                rows.add(element.getAsJsonObject());
+            }
+        }
+        return rows;
+    }
+
+    private JsonObject detailObject(String detail) {
+        JsonObject json = new JsonObject();
+        json.addProperty("detail", detail);
+        return json;
+    }
+
     private List<WorldEntry> listWorlds(String path, String label) {
         List<WorldEntry> entries = new ArrayList<>();
         try {
@@ -865,5 +1081,50 @@ public final class WorldsRepository {
     }
 
     public record JoinRequest(long id, String playerName, String worldName) {
+    }
+
+    public record BackupEntry(long id, String kind, long sizeBytes, String createdAt, String sha256) {
+    }
+
+    public record BackupJob(
+        long id,
+        String worldName,
+        String jobType,
+        String kind,
+        long backupId,
+        String requestedBy,
+        String status,
+        String message,
+        int attempts
+    ) {
+    }
+
+    public record WorldBackupOverview(int manualLimit, List<BackupEntry> backups, List<BackupJob> jobs) {
+    }
+
+    public record BackupPart(int partNumber, String etag) {
+    }
+
+    public record BackupDownload(String url, long sizeBytes, String sha256) {
+    }
+
+    public record BackupStartResult(boolean ok, boolean skipped, long backupId, String error) {
+    }
+
+    public record JobHeartbeat(boolean reachable, boolean owned) {
+    }
+
+    public record BackupApiResult(int statusCode, JsonObject json) {
+        public boolean ok() {
+            return statusCode / 100 == 2;
+        }
+
+        /** Fehlercode der API (z.B. "manual-limit", "already-queued"), leer wenn keiner vorhanden. */
+        public String detail() {
+            if (json == null || !json.has("detail") || !json.get("detail").isJsonPrimitive()) {
+                return statusCode == 0 ? "api-unreachable" : "";
+            }
+            return json.get("detail").getAsString();
+        }
     }
 }
