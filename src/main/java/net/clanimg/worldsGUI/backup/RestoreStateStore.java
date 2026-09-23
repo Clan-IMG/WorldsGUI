@@ -3,6 +3,7 @@ package net.clanimg.worldsGUI.backup;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -59,11 +60,21 @@ final class RestoreStateStore {
         properties.setProperty("phase", phase.name());
 
         Path target = fileFor(worldName);
-        Path temp = directory.resolve(worldName + ".state.tmp");
-        try (OutputStream out = Files.newOutputStream(temp)) {
-            properties.store(out, "WorldsGUI restore state");
+        // Eindeutiger Temp-Name: eine liegengebliebene, evtl. fremd besessene ".state.tmp" blockiert sonst jeden Restore.
+        Files.deleteIfExists(directory.resolve(worldName + ".state.tmp"));
+        Path temp = Files.createTempFile(directory, worldName + ".state.", ".tmp");
+        try {
+            try (OutputStream out = Files.newOutputStream(temp)) {
+                properties.store(out, "WorldsGUI restore state");
+            }
+            try {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ex) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temp);
         }
-        Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
     void clear(String worldName) {

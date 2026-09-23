@@ -565,7 +565,9 @@ final class BackupRunner {
         try {
             states.write(world, jobId, phase);
         } catch (IOException ex) {
-            throw new BackupException("Restore-Status konnte nicht gespeichert werden: " + ex.getMessage(), ex);
+            // Bei AccessDenied/NoSuchFile ist die Message nur der Pfad, daher den Typ mitloggen.
+            throw new BackupException("Restore-Status konnte nicht gespeichert werden ("
+                + ex.getClass().getSimpleName() + "): " + ex.getMessage(), ex);
         }
     }
 
