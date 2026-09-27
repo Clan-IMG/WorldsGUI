@@ -2223,18 +2223,8 @@ public final class GuiManager {
         return out;
     }
 
-    public void executeRename(Player player, String[] args) {
-        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.RENAME, true)) {
-            return;
-        }
-        handleRenameCommand(player, args);
-    }
-
     public void executeNavRename(Player player, String worldName, String[] args) {
-        if (!hasPermission(player, Permissions.USE, true)) {
-            return;
-        }
-        if (!player.hasPermission(Permissions.NAV_RENAME) && !hasPermission(player, Permissions.RENAME, true)) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_RENAME, true)) {
             return;
         }
         handleRenameCommand(player, worldName, args);
