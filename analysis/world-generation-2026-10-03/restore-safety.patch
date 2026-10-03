@@ -1,0 +1,425 @@
+--- a/src/main/java/net/clanimg/worldsGUI/gui/GuiManager.java
++++ b/src/main/java/net/clanimg/worldsGUI/gui/GuiManager.java
+@@ -976,7 +976,8 @@
+                     if (!isWorldOnThisServer(entry)) {
+                         continue;
+                     }
+-                    if (Bukkit.getWorld(entry.worldName()) != null) {
++                    if (backupService.isWorldBusy(entry.worldName())
++                        || Bukkit.getWorld(entry.worldName()) != null) {
+                         continue;
+                     }
+                     createWorldFromMetadata(entry);
+@@ -988,6 +989,36 @@
+     private void createWorldFromMetadata(WorldEntry entry) {
+         String worldName = entry.worldName();
+         String worldKey = worldName.toLowerCase(Locale.ROOT);
++        if (backupService.isWorldBusy(worldName)) {
++            metadataWorldCreationsInProgress.remove(worldKey);
++            return;
++        }
++
++        File existingFolder = new File(Bukkit.getWorldContainer(), worldName);
++        if (existingFolder.exists()) {
++            // Existing worlds must use their registered environment and generator.
++            // Do not run the new-world creator or re-import an existing MV entry.
++            File levelDat = new File(existingFolder, "level.dat");
++            if (!existingFolder.isDirectory() || !levelDat.isFile() || levelDat.length() == 0L) {
++                plugin.getLogger().severe("Bestehende Welt ohne level.dat wird nicht geladen: " + worldName);
++                metadataWorldCreationsInProgress.remove(worldKey);
++                return;
++            }
++            Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
++            if (mvCore == null || !mvCore.isEnabled()) {
++                plugin.getLogger().warning("Multiverse ist nicht bereit; Welt bleibt ungeladen: " + worldName);
++            } else {
++                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
++                World loaded = Bukkit.getWorld(worldName);
++                if (loaded == null) {
++                    plugin.getLogger().warning("Bestehende Welt konnte nicht sicher geladen werden: " + worldName);
++                } else {
++                    refreshWorldGuardProtection(worldName);
++                }
++            }
++            metadataWorldCreationsInProgress.remove(worldKey);
++            return;
++        }
+         String ownerUuid = entry.ownerUuid();
+         String ownerName = entry.ownerName();
+         List<String> customers = entry.customers() == null || entry.customers().isEmpty()
+@@ -1052,7 +1083,8 @@
+         }
+ 
+         String worldName = entry.worldName();
+-        if (worldName == null || worldName.isBlank() || Bukkit.getWorld(worldName) != null) {
++        if (worldName == null || worldName.isBlank() || backupService.isWorldBusy(worldName)
++            || Bukkit.getWorld(worldName) != null) {
+             return;
+         }
+ 
+@@ -1898,6 +1930,10 @@
+             return;
+         }
+ 
++        if (backupService.isWorldBusy(sourceEntry.worldName())) {
++            sendWithPrefix(player, "backup.world-busy", "Diese Welt wird gerade wiederhergestellt.");
++            return;
++        }
+         CloneTarget target = resolveCloneTarget(player, targetPlayerName);
+         if (target == null) {
+             return;
+@@ -2327,6 +2363,16 @@
+             return;
+         }
+ 
++        if (backupService.isWorldBusy(normalizedWorld)) {
++            sendWithPrefix(player, "backup.world-busy", "Diese Welt wird gerade wiederhergestellt.");
++            return;
++        }
++        File importFolder = new File(Bukkit.getWorldContainer(), normalizedWorld);
++        File levelDat = new File(importFolder, "level.dat");
++        if (!levelDat.isFile() || levelDat.length() == 0L) {
++            send(player, "import.load-failed", "%world%", normalizedWorld);
++            return;
++        }
+         World world = Bukkit.getWorld(normalizedWorld);
+         if (world == null) {
+             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv import " + normalizedWorld + " normal");
+@@ -3368,6 +3414,10 @@
+         boolean notifyWhenVisible,
+         String requestedServer
+     ) {
++        if (backupService.isWorldBusy(worldName)) {
++            sendWithPrefix(player, "backup.world-busy", "Diese Welt wird gerade wiederhergestellt.");
++            return;
++        }
+         int nextIndex = resolveMetadataWorldIndex(player, worldName);
+         String targetServer = requestedServer != null && !requestedServer.isBlank()
+             ? requestedServer.trim()
+--- a/src/main/java/net/clanimg/worldsGUI/backup/BackupService.java
++++ b/src/main/java/net/clanimg/worldsGUI/backup/BackupService.java
+@@ -142,7 +142,8 @@
+ 
+     /** Während eines Restore darf niemand die Welt betreten. */
+     public boolean isWorldBusy(String worldName) {
+-        return worldName != null && busyWorlds.contains(worldName);
++        return worldName != null && (busyWorlds.stream().anyMatch(worldName::equalsIgnoreCase)
++            || states.hasState(worldName));
+     }
+ 
+     // ------------------------------------------------------------------
+--- a/src/main/java/net/clanimg/worldsGUI/backup/RestoreStateStore.java
++++ b/src/main/java/net/clanimg/worldsGUI/backup/RestoreStateStore.java
+@@ -36,6 +36,13 @@
+         this.directory = directory;
+     }
+ 
++    boolean hasState(String worldName) {
++        if (Files.exists(fileFor(worldName))) {
++            return true;
++        }
++        return worldsWithState().stream().anyMatch(worldName::equalsIgnoreCase);
++    }
++
+     Optional<State> read(String worldName) {
+         Path file = fileFor(worldName);
+         if (!Files.isRegularFile(file)) {
+@@ -49,7 +56,7 @@
+                 Phase.valueOf(properties.getProperty("phase", Phase.PREPARING.name()))
+             ));
+         } catch (IOException | IllegalArgumentException ex) {
+-            return Optional.empty();
++            throw new BackupException("Restore-Status ist nicht lesbar: " + file, ex);
+         }
+     }
+ 
+@@ -97,8 +104,8 @@
+                     worlds.add(name.substring(0, name.length() - ".state".length()));
+                 }
+             });
+-        } catch (IOException ignored) {
+-            // Kein Zugriff: dann gibt es nichts wiederherzustellen.
++        } catch (IOException ex) {
++            throw new BackupException("Restore-Statusverzeichnis ist nicht lesbar: " + directory, ex);
+         }
+         return worlds;
+     }
+--- a/src/main/java/net/clanimg/worldsGUI/backup/BackupRunner.java
++++ b/src/main/java/net/clanimg/worldsGUI/backup/BackupRunner.java
+@@ -7,10 +7,8 @@
+ import java.net.http.HttpClient;
+ import java.net.http.HttpRequest;
+ import java.net.http.HttpResponse;
+-import java.nio.file.AccessDeniedException;
+ import java.nio.file.FileVisitResult;
+ import java.nio.file.Files;
+-import java.nio.file.NoSuchFileException;
+ import java.nio.file.Path;
+ import java.nio.file.SimpleFileVisitor;
+ import java.nio.file.StandardCopyOption;
+@@ -117,6 +115,7 @@
+         Boolean previousAutoSave = mainThread.call(() -> hooks.pauseAutoSave(worldName));
+         try {
+             ctx.checkCancelled();
++            requireLevelDat(folder);
+             WorldFingerprint fingerprint = fingerprintOf(folder);
+             long partSize = choosePartSize(fingerprint);
+ 
+@@ -208,15 +207,8 @@
+                     return FileVisitResult.CONTINUE;
+                 }
+ 
+-                InputStream in;
+-                try {
+-                    in = Files.newInputStream(file);
+-                } catch (NoSuchFileException | AccessDeniedException ex) {
+-                    // Datei ist zwischen Auflisten und Lesen verschwunden bzw. gesperrt: überspringen.
+-                    return FileVisitResult.CONTINUE;
+-                }
+-
+-                try (in) {
++                // A successfully uploaded archive must not silently omit world files.
++                try (InputStream in = Files.newInputStream(file)) {
+                     ZipEntry entry = new ZipEntry(relative);
+                     entry.setTime(attrs.lastModifiedTime().toMillis());
+                     zip.putNextEntry(entry);
+@@ -227,8 +219,8 @@
+             }
+ 
+             @Override
+-            public FileVisitResult visitFileFailed(Path file, IOException exc) {
+-                return FileVisitResult.CONTINUE;
++            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
++                throw exc;
+             }
+         });
+     }
+@@ -270,6 +262,18 @@
+ 
+     /** @return Ergebnistext für den Auftrag */
+     String runRestore(JobContext ctx) {
++        String world = ctx.job().worldName();
++        if (!busyWorlds.add(world)) {
++            throw new BackupException("Für diese Welt läuft bereits ein Restore");
++        }
++        try {
++            return runRestoreLocked(ctx);
++        } finally {
++            busyWorlds.remove(world);
++        }
++    }
++
++    private String runRestoreLocked(JobContext ctx) {
+         BackupJob job = ctx.job();
+         String world = job.worldName();
+         Path folder = worldFolder(world);
+@@ -285,8 +289,11 @@
+         // Reste eines früheren, unterbrochenen Restores in einen konsistenten Zustand bringen.
+         recoverFolders(world);
+         states.clear(world);
++        if (Files.exists(old)) {
++            throw new BackupException("Vorheriger Weltstand bleibt erhalten: " + old
++                + ". Vor einem weiteren Restore offline archivieren.");
++        }
+         deleteRecursive(tmp);
+-        deleteRecursive(old);
+ 
+         ctx.phase("download");
+         BackupDownload download = repository.requestBackupDownload(job.backupId())
+@@ -301,7 +308,6 @@
+             throw ex;
+         }
+ 
+-        busyWorlds.add(world);
+         try {
+             if (Files.isDirectory(folder)) {
+                 ctx.phase("stop-world");
+@@ -315,6 +321,10 @@
+ 
+             ctx.phase("swap");
+             ctx.checkCancelled();
++            if (mainThread.call(() -> Bukkit.getWorld(world) != null)) {
++                throw new BackupException("Welt wurde während des Restores erneut geladen; kein Ordner-Tausch");
++            }
++            requireLevelDat(tmp);
+             writeState(world, job.id(), Phase.SWAPPING);
+             if (Files.exists(folder)) {
+                 moveDirectoryOrFail(folder, old);
+@@ -324,10 +334,9 @@
+ 
+             return finishRestore(ctx, world);
+         } catch (RuntimeException ex) {
+-            restoreConsistencyAfterFailure(world);
++            // Retain state and both world versions; no speculative load or destructive rollback.
++            logger.severe("Restore abgebrochen; Status und Weltstände bleiben zur Offline-Prüfung erhalten: " + world);
+             throw ex;
+-        } finally {
+-            busyWorlds.remove(world);
+         }
+     }
+ 
+@@ -348,52 +357,23 @@
+         Path old = previousFolder(world);
+ 
+         ctx.phase("load");
+-        if (!mainThread.call(() -> hooks.loadWorld(world))) {
+-            rollbackAfterFailedLoad(world);
+-            throw new BackupException("Die wiederhergestellte Welt konnte nicht geladen werden, der vorherige Stand wurde wiederhergestellt");
++        requireLevelDat(folder);
++        if (!mainThread.call(() -> {
++            if (Bukkit.getWorld(world) != null) {
++                throw new BackupException("Welt ist vor dem vorgesehenen Restore-Laden bereits geladen");
++            }
++            return hooks.loadWorld(world);
++        })) {
++            throw new BackupException("Welt konnte nicht geladen werden; beide Stände und Restore-Status bleiben erhalten");
+         }
+ 
+         runOnMainThread(() -> hooks.refreshWorldProtection(world));
+         states.clear(world);
+-        if (Files.exists(old) && !deleteRecursive(old)) {
+-            logger.warning("Der vorherige Weltstand konnte nicht gelöscht werden: " + old);
++        if (Files.exists(old)) {
++            logger.info("Vorheriger Weltstand bleibt erhalten: " + old);
+         }
+         logger.info("Welt " + world + " aus Backup wiederhergestellt (" + folder.getFileName() + ").");
+         return "Welt wiederhergestellt";
+-    }
+-
+-    private void rollbackAfterFailedLoad(String world) {
+-        Path folder = worldFolder(world);
+-        Path old = previousFolder(world);
+-        Path failed = worldContainer.resolve(world + ".restore-failed");
+-
+-        try {
+-            mainThread.call(() -> hooks.unloadWorldForRestore(world));
+-            deleteRecursive(failed);
+-            if (Files.exists(folder)) {
+-                moveDirectory(folder, failed);
+-            }
+-            if (Files.isDirectory(old)) {
+-                moveDirectory(old, folder);
+-            }
+-            states.clear(world);
+-            mainThread.call(() -> hooks.loadWorld(world));
+-            deleteRecursive(failed);
+-        } catch (IOException | RuntimeException ex) {
+-            logger.severe("Rollback der Welt " + world + " nach fehlgeschlagenem Restore ist fehlgeschlagen: " + ex.getMessage()
+-                + " (vorheriger Stand liegt ggf. in " + old.getFileName() + ")");
+-        }
+-    }
+-
+-    private void restoreConsistencyAfterFailure(String world) {
+-        try {
+-            recoverFolders(world);
+-            if (Files.isDirectory(worldFolder(world))) {
+-                mainThread.call(() -> hooks.loadWorld(world));
+-            }
+-        } catch (RuntimeException ex) {
+-            logger.warning("Aufräumen nach fehlgeschlagenem Restore von " + world + " nicht vollständig: " + ex.getMessage());
+-        }
+     }
+ 
+     private void downloadAndExtract(JobContext ctx, BackupDownload download, Path target) {
+@@ -404,6 +384,7 @@
+             try {
+                 Files.createDirectories(target);
+                 extractZip(ctx, download, target);
++                requireLevelDat(target);
+                 return;
+             } catch (IOException ex) {
+                 lastError = ex;
+@@ -495,38 +476,16 @@
+                     states.clear(world);
+                 }
+                 case SWAPPING -> {
+-                    boolean hasFolder = Files.exists(folder);
+-                    boolean hasTmp = Files.isDirectory(tmp);
+-                    boolean hasOld = Files.isDirectory(old);
+-
+-                    if (hasTmp && (!hasFolder || hasOld)) {
+-                        // Entpackte Daten sind vollständig und der Tausch hatte begonnen: zu Ende führen.
+-                        // Ein danach neu erzeugter Ordner (z.B. leere Welt durch Auto-Load) wird ersetzt.
+-                        stopWorldForFolderOperations(world);
+-                        if (hasFolder) {
+-                            deleteRecursive(folder);
+-                        }
+-                        moveDirectory(tmp, folder);
+-                        writeState(world, state.get().jobId(), Phase.DONE);
+-                    } else if (hasTmp) {
+-                        deleteRecursive(tmp);
+-                        states.clear(world);
+-                    } else if (hasFolder) {
+-                        writeState(world, state.get().jobId(), Phase.DONE);
+-                    } else if (hasOld) {
+-                        stopWorldForFolderOperations(world);
+-                        moveDirectory(old, folder);
+-                        states.clear(world);
+-                    } else {
+-                        states.clear(world);
+-                    }
++                    // Do not infer that an existing world folder is empty or disposable.
++                    stopWorldForFolderOperations(world);
++                    throw new BackupException("Unterbrochener Ordner-Tausch erfordert Offline-Prüfung: " + world);
+                 }
+                 case DONE -> {
+                     // Bleibt bestehen, bis der Auftrag erneut aufgenommen und abgeschlossen wird.
+                 }
+             }
+         } catch (IOException ex) {
+-            logger.severe("Wiederherstellung der Ordner von Welt " + world + " fehlgeschlagen: " + ex.getMessage());
++            throw new BackupException("Wiederherstellung der Ordner fehlgeschlagen: " + world, ex);
+         }
+     }
+ 
+@@ -538,16 +497,32 @@
+     }
+ 
+     private void stopWorldForFolderOperations(String world) {
+-        try {
+-            mainThread.call(() -> hooks.unloadWorldForRestore(world));
+-        } catch (RuntimeException ex) {
+-            logger.warning("Welt " + world + " konnte vor dem Ordner-Tausch nicht entladen werden: " + ex.getMessage());
++        if (!mainThread.call(() -> hooks.unloadWorldForRestore(world))) {
++            throw new BackupException("Welt konnte vor dem Ordner-Tausch nicht entladen werden: " + world);
+         }
+     }
+ 
+     // ------------------------------------------------------------------
+     // Helfer
+     // ------------------------------------------------------------------
++
++    private void requireLevelDat(Path folder) {
++        Path levelDat = folder.resolve("level.dat");
++        try {
++            if (!Files.isRegularFile(levelDat) || Files.size(levelDat) == 0L) {
++                throw new BackupException("level.dat fehlt oder ist leer: " + levelDat);
++            }
++            // This only proves file readability. The full generation-manifest/NBT validator
++            // described in ANALYSE.md is still required before production rollout.
++            try (InputStream in = Files.newInputStream(levelDat)) {
++                if (in.read() < 0) {
++                    throw new BackupException("level.dat ist leer: " + levelDat);
++                }
++            }
++        } catch (IOException ex) {
++            throw new BackupException("level.dat ist nicht lesbar: " + levelDat, ex);
++        }
++    }
+ 
+     private Path worldFolder(String world) {
+         return worldContainer.resolve(world);
+--- a/src/main/java/net/clanimg/worldsGUI/backup/WorldFingerprint.java
++++ b/src/main/java/net/clanimg/worldsGUI/backup/WorldFingerprint.java
+@@ -49,9 +49,8 @@
+             }
+ 
+             @Override
+-            public FileVisitResult visitFileFailed(Path file, IOException exc) {
+-                // Datei ist zwischen Auflisten und Lesen verschwunden (z.B. Chunk-Datei wurde ersetzt).
+-                return FileVisitResult.CONTINUE;
++            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
++                throw exc;
+             }
+         });
+ 
