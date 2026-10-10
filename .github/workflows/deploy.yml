@@ -55,6 +55,8 @@ jobs:
           PLUGIN_PATH: ${{ vars.PLUGIN_PATH }}
         run: |
           while IFS= read -r path; do
+            # Im Browser eingetragene Variablen haben Windows-Zeilenenden – \r gehört nicht zum Pfad.
+            path="${path%$'\r'}"
             [ -z "$path" ] && continue
 
             echo "Deploy nach: $path"
