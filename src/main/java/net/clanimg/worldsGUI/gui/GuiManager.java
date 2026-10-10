@@ -117,21 +117,6 @@ public final class GuiManager {
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
     private static final int WORLD_BORDER_BLOCKS = 29_999_984;
-    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of(
-        "confirm",
-        "create-world",
-        "select-server",
-        "my-worlds",
-        "edit-world",
-        "invited-worlds",
-        "invited-friends",
-        "trusted-friends",
-        "select-friend",
-        "edit-friend",
-        "world-backups",
-        "tickets",
-        "archived-tickets"
-    );
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
     private static final Pattern GENERATED_WORLD_NAME_PATTERN = Pattern.compile("^.+-(\\d{4})$");
@@ -306,20 +291,27 @@ public final class GuiManager {
 
     /**
      * Zentraler Einstiegspunkt zum Öffnen eines GUIs über eine gui-id (aus guis.yml Triggern
-     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). GUIs aus {@link #RUNTIME_GUI_IDS}
-     * werden über die neue Runtime-Engine gerendert; alle anderen bekannten IDs fallen (Hybrid-Rollout)
-     * vorerst auf die bestehende, hardcodierte Java-GUI-Logik zurück.
+     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). Jede in guis.yml definierte
+     * gui-id wird über die Runtime-Engine gerendert; unbekannte IDs werden nur geloggt.
      */
     private void openGui(Player player, String guiId) {
         if (guiId == null || guiId.isBlank()) {
             return;
         }
         String normalized = guiId.trim().toLowerCase(Locale.ROOT);
-        if (RUNTIME_GUI_IDS.contains(normalized)) {
+        if (guiConfig == null || guiConfig.get(normalized).isPresent()) {
             openRuntimeGui(player, normalized);
             return;
         }
-        plugin.getLogger().warning("GUI '" + guiId + "' wird von der neuen guis.yml-Engine noch nicht unterstützt.");
+        plugin.getLogger().warning("GUI '" + guiId + "' ist in guis.yml nicht definiert.");
+    }
+
+    /**
+     * true, wenn ein Slot per "requires-plugin" ein Plugin voraussetzt, das gerade nicht aktiv ist.
+     */
+    private boolean isRequiredPluginMissing(String requiresPlugin) {
+        return requiresPlugin != null && !requiresPlugin.isBlank()
+            && !Bukkit.getPluginManager().isPluginEnabled(requiresPlugin);
     }
 
     private void openRuntimeGui(Player player, String guiId) {
@@ -353,7 +345,7 @@ public final class GuiManager {
             int absolute = SlotMapper.mapRowSlotToAbsolute(rowSlot, definition.position(), definition.size());
             GuiSlotDefinition slotDefinition = definition.rowSlots().get(rowSlot);
 
-            if (slotDefinition == null) {
+            if (slotDefinition == null || isRequiredPluginMissing(slotDefinition.requiresPlugin())) {
                 inventory.setItem(absolute, namedItem(Material.GRAY_STAINED_GLASS_PANE, ""));
                 continue;
             }
@@ -392,7 +384,9 @@ public final class GuiManager {
 
     private void renderSlotRange(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player, PlayerGuiSession session) {
         for (GuiSlotRangeDefinition range : definition.slotRanges()) {
-            List<Map<String, String>> items = resolveSlotRangeItems(range, player, session);
+            List<Map<String, String>> items = isRequiredPluginMissing(range.requiresPlugin())
+                ? List.of()
+                : resolveSlotRangeItems(range, player, session);
             int slotCount = range.to() - range.from() + 1;
             for (int i = 0; i < slotCount; i++) {
                 int absolute = range.from() + i;

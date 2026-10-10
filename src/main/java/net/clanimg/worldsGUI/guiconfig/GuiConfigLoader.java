@@ -173,6 +173,7 @@ public final class GuiConfigLoader {
         String material = section.getString("material", DEFAULT_MATERIAL);
         String title = section.getString("title", "");
         List<String> lore = section.getStringList("lore");
+        String requiresPlugin = section.getString("requires-plugin");
         GuiAction action = null;
 
         ConfigurationSection actionSection = section.getConfigurationSection("action");
@@ -180,7 +181,7 @@ public final class GuiConfigLoader {
             action = parseAction(guiId, slotKey, actionSection, errors, warnings);
         }
 
-        return new GuiSlotDefinition(material, title, lore, action);
+        return new GuiSlotDefinition(material, title, lore, action, requiresPlugin);
     }
 
     private static GuiSlotRangeDefinition parseSlotRange(String guiId, String rangeKey, ConfigurationSection section, int guiSize, List<String> errors, List<String> warnings) {
@@ -207,6 +208,7 @@ public final class GuiConfigLoader {
         List<String> lore = section.getStringList("lore");
         String emptyMaterial = section.getString("empty-material");
         String emptyTitle = section.getString("empty-title", "");
+        String requiresPlugin = section.getString("requires-plugin");
         GuiAction action = null;
 
         ConfigurationSection actionSection = section.getConfigurationSection("action");
@@ -214,7 +216,7 @@ public final class GuiConfigLoader {
             action = parseAction(guiId, rangeKey, actionSection, errors, warnings);
         }
 
-        return new GuiSlotRangeDefinition(from, to, source, filter, material, title, lore, emptyMaterial, emptyTitle, action);
+        return new GuiSlotRangeDefinition(from, to, source, filter, material, title, lore, emptyMaterial, emptyTitle, action, requiresPlugin);
     }
 
     private static GuiAction parseAction(String guiId, String slotKey, ConfigurationSection actionSection, List<String> errors, List<String> warnings) {
