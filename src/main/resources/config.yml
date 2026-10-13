@@ -15,8 +15,7 @@ api:
   # erlaubten Servern bleiben verfügbar. Namen werden exakt verglichen (ohne Beachtung
   # der Groß-/Kleinschreibung): lobby-1 und lobby-2 sind unterschiedliche Server.
   blocked-server-names:
-    - "lobby-1"
-    - "lobby-2"
+    - "lobby"
     - "plotwelt"
 
   # Optional override für die lokale Server-ID.
