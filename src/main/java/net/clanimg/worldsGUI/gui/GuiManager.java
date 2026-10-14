@@ -45,6 +45,7 @@ import net.clanimg.worldsGUI.backup.BackupFormat;
 import net.clanimg.worldsGUI.backup.BackupService;
 import net.clanimg.worldsGUI.backup.BackupWorldHooks;
 import net.clanimg.worldsGUI.data.WorldsRepository;
+import net.clanimg.worldsGUI.diagnostics.WorldGenerationDebug;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupApiResult;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupEntry;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupJob;
@@ -116,21 +117,6 @@ public final class GuiManager {
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
     private static final int WORLD_BORDER_BLOCKS = 29_999_984;
-    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of(
-        "confirm",
-        "create-world",
-        "select-server",
-        "my-worlds",
-        "edit-world",
-        "invited-worlds",
-        "invited-friends",
-        "trusted-friends",
-        "select-friend",
-        "edit-friend",
-        "world-backups",
-        "tickets",
-        "archived-tickets"
-    );
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
     private static final Pattern GENERATED_WORLD_NAME_PATTERN = Pattern.compile("^.+-(\\d{4})$");
@@ -182,10 +168,12 @@ public final class GuiManager {
     private final PlayerSessionManager playerSessions = new PlayerSessionManager();
     private final TriggerDispatcher triggerDispatcher;
     private final BackupService backupService;
+    private final WorldGenerationDebug generationDebug;
 
     public GuiManager(WorldsGUI plugin, WorldsRepository repository) {
         this.plugin = plugin;
         this.repository = repository;
+        this.generationDebug = new WorldGenerationDebug(plugin);
         this.worldKey = new NamespacedKey(plugin, "world_name");
         this.messagesConfig = loadMessagesConfig();
         this.worldDefaultsConfig = loadWorldDefaultsConfig();
@@ -199,7 +187,7 @@ public final class GuiManager {
                 }
                 try {
                     if (!dispatchRuntimeGuiCommand(player, command)) {
-                        Bukkit.dispatchCommand(player, command);
+                        generationDebug.dispatchCommand("runtime-gui@GuiManager:202", player, command);
                     }
                 } finally {
                     if (!chatFeedback) {
@@ -303,20 +291,27 @@ public final class GuiManager {
 
     /**
      * Zentraler Einstiegspunkt zum Öffnen eines GUIs über eine gui-id (aus guis.yml Triggern
-     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). GUIs aus {@link #RUNTIME_GUI_IDS}
-     * werden über die neue Runtime-Engine gerendert; alle anderen bekannten IDs fallen (Hybrid-Rollout)
-     * vorerst auf die bestehende, hardcodierte Java-GUI-Logik zurück.
+     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). Jede in guis.yml definierte
+     * gui-id wird über die Runtime-Engine gerendert; unbekannte IDs werden nur geloggt.
      */
     private void openGui(Player player, String guiId) {
         if (guiId == null || guiId.isBlank()) {
             return;
         }
         String normalized = guiId.trim().toLowerCase(Locale.ROOT);
-        if (RUNTIME_GUI_IDS.contains(normalized)) {
+        if (guiConfig == null || guiConfig.get(normalized).isPresent()) {
             openRuntimeGui(player, normalized);
             return;
         }
-        plugin.getLogger().warning("GUI '" + guiId + "' wird von der neuen guis.yml-Engine noch nicht unterstützt.");
+        plugin.getLogger().warning("GUI '" + guiId + "' ist in guis.yml nicht definiert.");
+    }
+
+    /**
+     * true, wenn ein Slot per "requires-plugin" ein Plugin voraussetzt, das gerade nicht aktiv ist.
+     */
+    private boolean isRequiredPluginMissing(String requiresPlugin) {
+        return requiresPlugin != null && !requiresPlugin.isBlank()
+            && !Bukkit.getPluginManager().isPluginEnabled(requiresPlugin);
     }
 
     private void openRuntimeGui(Player player, String guiId) {
@@ -350,7 +345,7 @@ public final class GuiManager {
             int absolute = SlotMapper.mapRowSlotToAbsolute(rowSlot, definition.position(), definition.size());
             GuiSlotDefinition slotDefinition = definition.rowSlots().get(rowSlot);
 
-            if (slotDefinition == null) {
+            if (slotDefinition == null || isRequiredPluginMissing(slotDefinition.requiresPlugin())) {
                 inventory.setItem(absolute, namedItem(Material.GRAY_STAINED_GLASS_PANE, ""));
                 continue;
             }
@@ -389,7 +384,9 @@ public final class GuiManager {
 
     private void renderSlotRange(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player, PlayerGuiSession session) {
         for (GuiSlotRangeDefinition range : definition.slotRanges()) {
-            List<Map<String, String>> items = resolveSlotRangeItems(range, player, session);
+            List<Map<String, String>> items = isRequiredPluginMissing(range.requiresPlugin())
+                ? List.of()
+                : resolveSlotRangeItems(range, player, session);
             int slotCount = range.to() - range.from() + 1;
             for (int i = 0; i < slotCount; i++) {
                 int absolute = range.from() + i;
@@ -909,6 +906,9 @@ public final class GuiManager {
     }
 
     public void syncAssignedTicketWorlds(Player player) {
+        if (!canCreateWorldsLocally()) {
+            return;
+        }
         if (player == null || !player.isOnline()) {
             return;
         }
@@ -988,6 +988,9 @@ public final class GuiManager {
     }
 
     public void syncOpenTicketWorlds() {
+        if (!canCreateWorldsLocally()) {
+            return;
+        }
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             Map<String, WorldEntry> worldsByName = new LinkedHashMap<>();
             for (WorldEntry entry : repository.listOpenTicketWorlds()) {
@@ -1020,7 +1023,13 @@ public final class GuiManager {
     }
 
     private void createWorldFromMetadata(WorldEntry entry) {
+        if (!canCreateWorldsLocally() || !isWorldOnThisServer(entry) || isBlockedServerName(entry.serverName())) {
+            metadataWorldCreationsInProgress.remove(entry.worldName().toLowerCase(Locale.ROOT));
+            return;
+        }
         String worldName = entry.worldName();
+        generationDebug.request("METADATA_CREATE", worldName, "FLAT_FORCED_BY_METADATA",
+            entry.serverName(), resolveLocalServerId(), true);
         String worldKey = worldName.toLowerCase(Locale.ROOT);
         String ownerUuid = entry.ownerUuid();
         String ownerName = entry.ownerName();
@@ -1035,7 +1044,7 @@ public final class GuiManager {
 
         WorldCreator creator = buildWorldCreator(worldName, false);
 
-        World created = Bukkit.createWorld(creator);
+        World created = generationDebug.createWorld("METADATA_CREATE", creator);
         if (created == null) {
             metadataWorldCreationsInProgress.remove(worldKey);
             plugin.getLogger().warning("Ticket-Welt konnte nicht erstellt werden: " + worldName);
@@ -1043,7 +1052,7 @@ public final class GuiManager {
         }
 
         ConsoleCommandSender console = Bukkit.getConsoleSender();
-        Bukkit.dispatchCommand(console, "mv import " + worldName + " normal");
+        generationDebug.dispatchCommand("createWorldFromMetadata.import@GuiManager:1012", console, "mv import " + worldName + " normal");
 
         new BukkitRunnable() {
             @Override
@@ -1473,7 +1482,7 @@ public final class GuiManager {
         for (String managedGroup : managedGroups) {
             boolean shouldHave = targetGroups.stream().anyMatch(group -> group.equalsIgnoreCase(managedGroup));
             if (shouldHave) {
-                executed &= Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + managedGroup);
+                executed &= generationDebug.dispatchCommand("luckperms.add@GuiManager:1442", Bukkit.getConsoleSender(), "lp user " + player.getName() + " parent add " + managedGroup);
             } else {
                 executed &= dispatchLuckPermsParentRemove(player.getName(), managedGroup);
             }
@@ -1490,7 +1499,7 @@ public final class GuiManager {
         if (group == null || group.isBlank()) {
             return true;
         }
-        return Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "lp user " + playerName + " parent remove " + group.trim());
+        return generationDebug.dispatchCommand("luckperms.remove@GuiManager:1459", Bukkit.getConsoleSender(), "lp user " + playerName + " parent remove " + group.trim());
     }
 
     private String resolveProfileApiBaseUrl() {
@@ -1907,6 +1916,9 @@ public final class GuiManager {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CLONE, true)) {
             return;
         }
+        if (!checkLocalWorldCreation(player)) {
+            return;
+        }
 
         String sourceName = sourceWorldName == null ? "" : sourceWorldName.trim();
         if (sourceName.isBlank()) {
@@ -1943,7 +1955,7 @@ public final class GuiManager {
             return;
         }
 
-        boolean cloneTriggered = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv clone " + sourceEntry.worldName() + " " + cloneWorldName);
+        boolean cloneTriggered = generationDebug.dispatchCommand("executeNavMyWorldClone.clone@GuiManager:1912", Bukkit.getConsoleSender(), "mv clone " + sourceEntry.worldName() + " " + cloneWorldName);
         if (!cloneTriggered) {
             send(player, "clone.mv-failed");
             return;
@@ -1952,7 +1964,7 @@ public final class GuiManager {
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             World cloned = Bukkit.getWorld(cloneWorldName);
             if (cloned == null) {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + cloneWorldName);
+                generationDebug.dispatchCommand("executeNavMyWorldClone.load@GuiManager:1921", Bukkit.getConsoleSender(), "mv load " + cloneWorldName);
                 cloned = Bukkit.getWorld(cloneWorldName);
             }
             if (cloned == null) {
@@ -2282,6 +2294,9 @@ public final class GuiManager {
     }
 
     public void ensurePersonalFlatWorldForJoin(Player player) {
+        if (!canCreateWorldsLocally()) {
+            return;
+        }
         String localServer = resolveLocalServerId();
 
         if (!localServer.isBlank() && isBlockedServerName(localServer)) {
@@ -2327,7 +2342,7 @@ public final class GuiManager {
 
             World world = Bukkit.getWorld(worldName);
             if (world == null) {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+                generationDebug.dispatchCommand("auto-create-on-join.load@GuiManager:2296", Bukkit.getConsoleSender(), "mv load " + worldName);
                 world = Bukkit.getWorld(worldName);
             }
             if (world == null) {
@@ -2342,6 +2357,9 @@ public final class GuiManager {
 
     public void executeNavMyWorldImport(Player player, String worldName, String targetPlayerName) {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_IMPORT, true)) {
+            return;
+        }
+        if (!checkLocalWorldCreation(player)) {
             return;
         }
 
@@ -2363,7 +2381,7 @@ public final class GuiManager {
 
         World world = Bukkit.getWorld(normalizedWorld);
         if (world == null) {
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv import " + normalizedWorld + " normal");
+            generationDebug.dispatchCommand("executeNavMyWorldImport.import@GuiManager:2332", Bukkit.getConsoleSender(), "mv import " + normalizedWorld + " normal");
             world = Bukkit.getWorld(normalizedWorld);
         }
         if (world == null) {
@@ -3413,9 +3431,14 @@ public final class GuiManager {
 
         String localServer = resolveLocalServerId();
         boolean shouldCreateLocally = targetServer.isBlank()
-            || localServer.isBlank()
             || isSameServerIdentifier(targetServer, localServer);
 
+        if (shouldCreateLocally && !checkLocalWorldCreation(player)) {
+            return;
+        }
+
+        generationDebug.request("GUI_OR_COMMAND_CREATE", worldName, voidWorld ? "VOID" : "FLAT",
+            targetServer, localServer, shouldCreateLocally);
         if (!shouldCreateLocally) {
             send(player, "create.remote-info-1");
             send(player, "create.remote-info-2", "%server%", targetServer);
@@ -3446,7 +3469,7 @@ public final class GuiManager {
 
         WorldCreator creator = buildWorldCreator(worldName, voidWorld);
 
-        World created = Bukkit.createWorld(creator);
+        World created = generationDebug.createWorld("LOCAL_CREATE", creator);
         if (created == null) {
             send(player, "create-failed", "%world%", worldName);
             return;
@@ -3456,7 +3479,7 @@ public final class GuiManager {
         runPostCreateCommands(created);
 
         ConsoleCommandSender console = Bukkit.getConsoleSender();
-        Bukkit.dispatchCommand(console, "mv import " + worldName + " normal");
+        generationDebug.dispatchCommand("createWorld.import@GuiManager:3425", console, "mv import " + worldName + " normal");
 
         // Title sofort zeigen
         String creatingTitle = configuredMessageLine("create-creating-title", "Welt wird erstellt...");
@@ -3579,11 +3602,11 @@ public final class GuiManager {
 
         ConsoleCommandSender console = Bukkit.getConsoleSender();
         String worldName = world.getName();
-        Bukkit.dispatchCommand(console, "chunky world " + worldName);
-        Bukkit.dispatchCommand(console, "chunky center");
-        Bukkit.dispatchCommand(console, "chunky shape circle");
-        Bukkit.dispatchCommand(console, "chunky radius 2500");
-        Bukkit.dispatchCommand(console, "chunky start");
+        generationDebug.dispatchCommand("configureChunkyWorld.world@GuiManager:3548", console, "chunky world " + worldName);
+        generationDebug.dispatchCommand("configureChunkyWorld.center@GuiManager:3549", console, "chunky center");
+        generationDebug.dispatchCommand("configureChunkyWorld.shape@GuiManager:3550", console, "chunky shape circle");
+        generationDebug.dispatchCommand("configureChunkyWorld.radius@GuiManager:3551", console, "chunky radius 2500");
+        generationDebug.dispatchCommand("configureChunkyWorld.start@GuiManager:3552", console, "chunky start");
     }
 
     private void prepareVoidSpawn(World world) {
@@ -3675,7 +3698,7 @@ public final class GuiManager {
         String worldName = entry.worldName();
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+            generationDebug.dispatchCommand("joinCreatedWorldWhenReady.load@GuiManager:3644", Bukkit.getConsoleSender(), "mv load " + worldName);
             world = Bukkit.getWorld(worldName);
         }
         if (world == null) {
@@ -3813,7 +3836,7 @@ public final class GuiManager {
 
         Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
         if (mvCore != null && mvCore.isEnabled()) {
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv delete " + worldName);
+            generationDebug.dispatchCommand("deleteWorld@GuiManager:3782", Bukkit.getConsoleSender(), "mv delete " + worldName);
         }
 
         World loaded = Bukkit.getWorld(worldName);
@@ -4121,7 +4144,7 @@ public final class GuiManager {
 
             World candidate = Bukkit.getWorld(entry.worldName());
             if (candidate == null) {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + entry.worldName());
+                generationDebug.dispatchCommand("resolveNextOwnWorld.load@GuiManager:4090", Bukkit.getConsoleSender(), "mv load " + entry.worldName());
                 candidate = Bukkit.getWorld(entry.worldName());
             }
             if (candidate != null) {
@@ -4272,7 +4295,7 @@ public final class GuiManager {
             world.save();
             Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
             if (mvCore != null && mvCore.isEnabled()) {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv unload " + worldName);
+                generationDebug.dispatchCommand("BackupHooks.unloadWorldForRestore@GuiManager:4241", Bukkit.getConsoleSender(), "mv unload " + worldName);
             }
             World stillLoaded = Bukkit.getWorld(worldName);
             if (stillLoaded != null && !Bukkit.unloadWorld(stillLoaded, true)) {
@@ -4288,7 +4311,7 @@ public final class GuiManager {
             }
             Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
             if (mvCore != null && mvCore.isEnabled()) {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+                generationDebug.dispatchCommand("BackupHooks.loadWorld@GuiManager:4257", Bukkit.getConsoleSender(), "mv load " + worldName);
             }
             return Bukkit.getWorld(worldName) != null;
         }
@@ -4422,7 +4445,7 @@ public final class GuiManager {
         }
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mv load " + worldName);
+            generationDebug.dispatchCommand("joinWorldLocally.load@GuiManager:4391", Bukkit.getConsoleSender(), "mv load " + worldName);
             world = Bukkit.getWorld(worldName);
         }
         if (world == null) {
@@ -4454,18 +4477,7 @@ public final class GuiManager {
     }
 
     private boolean isSameServerIdentifier(String left, String right) {
-        String a = normalizeServerIdentifier(left);
-        String b = normalizeServerIdentifier(right);
-        if (a.isBlank() || b.isBlank()) {
-            return false;
-        }
-        if (a.equalsIgnoreCase(b)) {
-            return true;
-        }
-
-        String aBase = stripInstanceSuffix(a);
-        String bBase = stripInstanceSuffix(b);
-        return !aBase.isBlank() && aBase.equalsIgnoreCase(bBase);
+        return ServerCreationPolicy.sameServer(left, right);
     }
 
     private String normalizeServerIdentifier(String value) {
@@ -4520,11 +4532,11 @@ public final class GuiManager {
 
         for (String envKey : List.of(
             "SIMPLECLOUD_SERVER_NAME",
-            "SIMPLECLOUD_SERVER_ID",
             "SIMPLECLOUD_SERVICE_NAME",
+            "SIMPLECLOUD_SERVER_ID",
             "SIMPLECLOUD_SERVICE_ID",
-            "CLOUDNET_SERVICE_ID",
-            "CLOUDNET_SERVICE_NAME"
+            "CLOUDNET_SERVICE_NAME",
+            "CLOUDNET_SERVICE_ID"
         )) {
             String value = System.getenv(envKey);
             if (value != null && !value.isBlank()) {
@@ -4640,7 +4652,31 @@ public final class GuiManager {
             return false;
         }
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
-        return blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, serverId));
+        return ServerCreationPolicy.isBlocked(serverId, blockedServers);
+    }
+
+    private boolean canCreateWorldsLocally() {
+        List<String> blockedServers = resolveConfiguredBlockedServerNames();
+        String explicitServer = resolveExplicitLocalServerId();
+        if (!blockedServers.isEmpty() && explicitServer.isBlank() && !warnedMissingExplicitServerIdForAutoCreate) {
+            warnedMissingExplicitServerIdForAutoCreate = true;
+            plugin.getLogger().warning("Lokale Welt-Erstellung deaktiviert: Bei gesetzter api.blocked-server-names "
+                + "muss der Servername über api.local-server-name oder die Cloud-Umgebung eindeutig bekannt sein.");
+        }
+        return ServerCreationPolicy.allowsLocalCreation(resolveLocalServerId(), explicitServer, blockedServers);
+    }
+
+    private boolean checkLocalWorldCreation(Player player) {
+        if (canCreateWorldsLocally()) {
+            return true;
+        }
+        if (isBlockedServerName(resolveLocalServerId())) {
+            send(player, "create.blocked-server", "%server%", resolveLocalServerId());
+        } else {
+            sendWithPrefix(player, "create.local-server-unidentified",
+                "Lokaler Servername unbekannt. Bitte api.local-server-name konfigurieren oder einen Zielserver auswählen.");
+        }
+        return false;
     }
 
     private List<String> resolveSelectableServerNames() {
@@ -5071,7 +5107,7 @@ public final class GuiManager {
                 continue;
             }
 
-            boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved);
+            boolean ok = generationDebug.dispatchCommand("runPostCreateCommands@GuiManager:4982", Bukkit.getConsoleSender(), resolved);
             if (!ok) {
                 plugin.getLogger().warning("Post-Create-Command fehlgeschlagen: " + resolved);
             }
@@ -5144,7 +5180,7 @@ public final class GuiManager {
             }
 
             String command = "rg flag -w " + worldName + " " + worldName + " " + resolvedFlag + " " + quoteIfNeeded(resolvedValue);
-            boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+            boolean ok = generationDebug.dispatchCommand("applyConfiguredWorldGuardFlags@GuiManager:5055", Bukkit.getConsoleSender(), command);
             if (!ok) {
                 plugin.getLogger().warning("WorldGuard-Flag konnte nicht gesetzt werden: " + command);
             }

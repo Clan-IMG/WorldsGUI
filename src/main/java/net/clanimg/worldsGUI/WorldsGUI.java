@@ -1,5 +1,7 @@
 package net.clanimg.worldsGUI;
 
+import net.clanimg.worldsGUI.api.WorldsGuiAddonApi;
+import net.clanimg.worldsGUI.api.WorldsGuiAddonApiImpl;
 import net.clanimg.worldsGUI.command.IconCommand;
 import net.clanimg.worldsGUI.command.NavCommand;
 import net.clanimg.worldsGUI.command.UnverifyCommand;
@@ -18,6 +20,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
@@ -38,6 +41,7 @@ public final class WorldsGUI extends JavaPlugin {
     private BukkitTask roleSyncTask;
     private BukkitTask serverHeartbeatTask;
     private ConsoleLoginListener consoleLoginListener;
+    private WorldsGuiAddonApiImpl addonApi;
     private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
 
     @Override
@@ -84,6 +88,10 @@ public final class WorldsGUI extends JavaPlugin {
         }
 
         guiManager.startBackupService();
+
+        // Addon-API für andere Plugins (z.B. MapMaker) im ServicesManager bereitstellen.
+        addonApi = new WorldsGuiAddonApiImpl(repository, guiManager);
+        Bukkit.getServicesManager().register(WorldsGuiAddonApi.class, addonApi, this, ServicePriority.Normal);
 
         consoleLoginListener = new ConsoleLoginListener();
 
@@ -214,6 +222,11 @@ public final class WorldsGUI extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (addonApi != null) {
+            Bukkit.getServicesManager().unregister(WorldsGuiAddonApi.class, addonApi);
+            addonApi.shutdown();
+            addonApi = null;
+        }
         if (joinRequestTask != null) {
             joinRequestTask.cancel();
             joinRequestTask = null;
