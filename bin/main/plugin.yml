@@ -112,6 +112,9 @@ permissions:
   worldsgui.command.nav.setspawn:
     description: Erlaubt /nav setspawn
     default: op
+  worldsgui.command.nav.setspawn.ticket:
+    description: Erlaubt /nav setspawn zusätzlich in Ticket-Welten (Aufträgen)
+    default: op
   worldsgui.command.nav.status:
     description: Erlaubt /nav status
     default: op
