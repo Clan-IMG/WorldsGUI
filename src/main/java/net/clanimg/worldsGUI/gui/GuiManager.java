@@ -960,8 +960,9 @@ public final class GuiManager {
 
                 String ticketServer = resolveTicketCreationServer();
                 String localServer = resolveLocalServerId();
+                // Ohne eindeutige lokale Server-ID erstellt createWorld nichts lokal
+                // (ServerCreationPolicy) - dann ebenfalls nur auf dem Ticket-Server anmelden.
                 boolean createHere = ticketServer == null
-                    || localServer.isBlank()
                     || isSameServerIdentifier(ticketServer, localServer);
 
                 for (PendingTicketWorld world : worldsToCreate) {

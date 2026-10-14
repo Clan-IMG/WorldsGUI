@@ -23,7 +23,8 @@ jobs:
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '21'
+          # Muss zur Toolchain in build.gradle.kts passen (Server laufen auf Java 25).
+          java-version: '25'
 
       - name: Gradle ausführbar machen
         run: chmod +x gradlew
