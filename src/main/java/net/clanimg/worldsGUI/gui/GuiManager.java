@@ -2961,35 +2961,66 @@ public final class GuiManager {
     }
 
     private void handleSetSpawn(Player player, String forcedWorldName) {
-        String worldName = forcedWorldName != null && !forcedWorldName.isBlank()
-            ? forcedWorldName
-            : resolveContextWorld(player);
-        if (worldName == null) {
-            send(player, "no-selected-world");
-            return;
-        }
-
-        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
-        if (entryOpt.isEmpty()) {
-            send(player, "world-not-found");
-            return;
-        }
-        WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString())) {
-            send(player, "not-world-owner");
-            return;
-        }
-
-        if (!player.getWorld().getName().equals(worldName)) {
+        // Der Spawn wird dort gesetzt, wo man steht - ohne Angabe also in der aktuellen Welt
+        // (früher die im Menü gewählte Welt, was bei Ticket-Welten nie gegriffen hat).
+        String currentWorld = player.getWorld().getName();
+        if (forcedWorldName != null && !forcedWorldName.isBlank() && !forcedWorldName.trim().equalsIgnoreCase(currentWorld)) {
             send(player, "setspawn-not-in-world");
             return;
         }
 
-        Location loc = player.getLocation();
-        World world = player.getWorld();
-        world.setSpawnLocation(loc);
-        repository.setSpawn(worldName, loc);
-        send(player, "setspawn-success");
+        Location loc = player.getLocation().clone();
+        UUID playerId = player.getUniqueId();
+        boolean admin = player.hasPermission(Permissions.ADMIN);
+        boolean ticketAllowed = admin || player.hasPermission(Permissions.NAV_SETSPAWN_TICKET);
+
+        // API-Aufrufe nicht im Haupt-Thread: hängt die API, friert sonst der ganze Server ein.
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            WorldsRepository.WorldLookup lookup = repository.lookupWorld(currentWorld);
+            String denialKey = null;
+            String denialFallback = null;
+            if (lookup.failed()) {
+                denialKey = "setspawn-api-unreachable";
+                denialFallback = "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal.";
+            } else if (lookup.entry().isEmpty()) {
+                denialKey = "world-not-found";
+            } else if (isTicketWorld(lookup.entry().get())) {
+                if (!ticketAllowed) {
+                    denialKey = "setspawn-ticket-no-permission";
+                    denialFallback = "Für Ticket-Welten fehlt dir die Berechtigung, den Spawn zu setzen.";
+                }
+            } else if (!admin && !lookup.entry().get().ownerUuid().equals(playerId.toString())) {
+                denialKey = "not-world-owner";
+            }
+
+            boolean saved = denialKey == null && repository.setSpawn(currentWorld, loc);
+            String finalDenialKey = denialKey;
+            String finalDenialFallback = denialFallback;
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+                if (finalDenialKey != null) {
+                    if (finalDenialFallback != null) {
+                        sendWithPrefix(online, finalDenialKey, finalDenialFallback);
+                    } else {
+                        send(online, finalDenialKey);
+                    }
+                    return;
+                }
+                if (!saved) {
+                    sendWithPrefix(online, "setspawn-api-unreachable", "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal.");
+                    return;
+                }
+                World world = Bukkit.getWorld(currentWorld);
+                if (world != null) {
+                    world.setSpawnLocation(loc);
+                }
+                send(online, "setspawn-success");
+            });
+        });
     }
 
     private void handleRenameCommand(Player player, String[] args) {

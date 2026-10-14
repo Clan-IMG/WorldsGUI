@@ -431,14 +431,14 @@ public final class WorldsRepository {
         patchOrWarn("/worlds/" + encode(worldName) + "/icon", body);
     }
 
-    public void setSpawn(String worldName, Location loc) {
+    public boolean setSpawn(String worldName, Location loc) {
         JsonObject body = new JsonObject();
         body.addProperty("x", loc.getX());
         body.addProperty("y", loc.getY());
         body.addProperty("z", loc.getZ());
         body.addProperty("yaw", loc.getYaw());
         body.addProperty("pitch", loc.getPitch());
-        patchOrWarn("/worlds/" + encode(worldName) + "/spawn", body);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/spawn", body);
     }
 
     public void deleteWorld(String worldName) {

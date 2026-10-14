@@ -155,6 +155,8 @@ with-prefix:
   setspawn-help: "Nutze &b/setspawn&7 in deiner Welt, um den Welt-Spawn zu setzen."
   setspawn-not-in-world: "Du musst dich in der ausgewählten Welt befinden."
   setspawn-success: "Spawn dieser Welt wurde gesetzt."
+  setspawn-ticket-no-permission: "Für Ticket-Welten fehlt dir die Berechtigung, den Spawn zu setzen."
+  setspawn-api-unreachable: "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal."
   backup.disabled: "Backups sind auf diesem Server deaktiviert."
   backup.not-available: "Für Ticket-Welten gibt es keine Backups."
   backup.invalid-id: "Ungültige Backup- bzw. Auftrags-ID."
