@@ -888,13 +888,24 @@ public final class GuiManager {
             return;
         }
 
+        WorldsRepository.WorldLookup existing = repository.lookupWorld(normalizedOrder);
+        if (existing.failed()) {
+            sendWithPrefix(player, "create.ticket-lookup-failed", "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal.");
+            return;
+        }
+        if (existing.entry().isPresent()) {
+            // Nie erneut anlegen: die API würde den Server der bestehenden Ticket-Welt überschreiben.
+            send(player, "world.already-exists");
+            return;
+        }
+
         List<String> customers = repository.getOrderSummary(normalizedOrder)
             .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
                 ? List.<String>of()
                 : List.of(summary.customerName().trim()))
             .orElse(List.of());
 
-        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder, customers);
+        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder, customers, false, false, true, resolveTicketCreationServer());
     }
 
     public void syncAssignedTicketWorlds(Player player) {
@@ -913,15 +924,28 @@ public final class GuiManager {
             List<PendingTicketWorld> worldsToCreate = new ArrayList<>();
 
             for (String orderId : orderIds) {
+                WorldsRepository.WorldLookup lookup = repository.lookupWorld(orderId);
+                if (lookup.failed()) {
+                    // Unklar, ob/wo die Welt schon existiert - lieber nichts anlegen, als eine
+                    // bestehende Ticket-Welt auf einen anderen Server umzuschreiben.
+                    continue;
+                }
+                Optional<WorldEntry> existing = lookup.entry();
+                if (existing.isPresent()) {
+                    // Existiert bereits (egal auf welchem Server): nie lokal neu anlegen. Früher
+                    // passierte das auf jedem Server, auf dem ein Builder /nav öffnete - die API
+                    // überschrieb dabei den Server und die Welt fehlte auf dem eigentlichen Server.
+                    if (existing.get().isArchived()) {
+                        repository.unarchiveWorld(orderId);
+                    }
+                    continue;
+                }
                 List<String> customers = repository.getOrderSummary(orderId)
                     .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
                         ? List.<String>of()
                         : List.of(summary.customerName().trim()))
                     .orElse(List.of());
-                boolean archived = repository.findByWorldName(orderId)
-                    .map(WorldEntry::isArchived)
-                    .orElse(false);
-                worldsToCreate.add(new PendingTicketWorld(orderId, customers, archived));
+                worldsToCreate.add(new PendingTicketWorld(orderId, customers));
             }
 
             if (worldsToCreate.isEmpty()) {
@@ -934,8 +958,14 @@ public final class GuiManager {
                     return;
                 }
 
+                String ticketServer = resolveTicketCreationServer();
+                String localServer = resolveLocalServerId();
+                boolean createHere = ticketServer == null
+                    || localServer.isBlank()
+                    || isSameServerIdentifier(ticketServer, localServer);
+
                 for (PendingTicketWorld world : worldsToCreate) {
-                    if (Bukkit.getWorld(world.worldName()) == null) {
+                    if (createHere) {
                         createWorld(
                             onlinePlayer,
                             world.worldName(),
@@ -943,10 +973,14 @@ public final class GuiManager {
                             false,
                             "ticket",
                             world.worldName(),
-                            world.customers()
+                            world.customers(),
+                            false,
+                            false,
+                            true,
+                            ticketServer
                         );
-                    } else if (world.archived()) {
-                        repository.unarchiveWorld(world.worldName());
+                    } else {
+                        queueTicketWorldOnServer(onlinePlayer, world.worldName(), world.customers(), ticketServer);
                     }
                 }
             });
@@ -2021,7 +2055,7 @@ public final class GuiManager {
             return;
         }
 
-        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder, List.of());
+        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder, List.of(), false, false, true, resolveTicketCreationServer());
     }
 
     /**
@@ -4504,6 +4538,64 @@ public final class GuiManager {
         return resolveLocalServerId();
     }
 
+    /**
+     * Ziel-Server für neue Ticket-Welten (config: api.ticket_server). Ticket-Welten liegen immer auf
+     * genau diesem einen Server, egal auf welchem Server der Auftrag angestoßen wird.
+     *
+     * @return null, wenn nichts konfiguriert ist (dann wie bisher automatisch bestimmt); die lokale
+     *         Server-ID, wenn dieser Server der Ticket-Server ist; sonst der konfigurierte Name.
+     */
+    private String resolveTicketCreationServer() {
+        // Bewusst ohne expliziten Fallback: so greift der Default aus der config.yml im Jar auch auf
+        // Servern, deren config.yml (wird beim Update nie überschrieben) den Key noch nicht hat.
+        String configured = plugin.getConfig().getString("api.ticket_server");
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+
+        String ticketServer = configured.trim();
+        String localServer = resolveLocalServerId();
+        if (!localServer.isBlank() && isSameServerIdentifier(ticketServer, localServer)) {
+            return localServer;
+        }
+        return ticketServer;
+    }
+
+    /**
+     * Legt nur die Metadaten einer Ticket-Welt mit dem Ticket-Server als Ziel an. Die Welt selbst
+     * erstellt der Ticket-Server (syncOpenTicketWorlds). Der Spieler wird dabei NICHT verbunden,
+     * weil das hier aus dem automatischen Abgleich beim Öffnen von /nav kommt.
+     */
+    private void queueTicketWorldOnServer(Player player, String worldName, List<String> customers, String server) {
+        if (isBlockedServerName(server)) {
+            send(player, "create.blocked-server", "%server%", server);
+            return;
+        }
+        int nextIndex = resolveMetadataWorldIndex(player, worldName);
+        persistWorldMetadataWithRetry(
+            player.getUniqueId(),
+            player.getName(),
+            worldName,
+            worldName,
+            worldName,
+            "ticket",
+            customers,
+            nextIndex,
+            false,
+            3,
+            false,
+            false,
+            server
+        );
+        sendWithPrefix(
+            player,
+            "create.ticket-queued",
+            "Ticket-Welt %world% wird auf %server% erstellt.",
+            "%world%", worldName,
+            "%server%", server
+        );
+    }
+
     private String resolveTargetCreationServer() {
         String localServer = resolveLocalServerId();
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
@@ -5682,7 +5774,7 @@ public final class GuiManager {
     private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs, boolean archiveOnly) {
     }
 
-    private record PendingTicketWorld(String worldName, List<String> customers, boolean archived) {
+    private record PendingTicketWorld(String worldName, List<String> customers) {
     }
 
     private record CloneTarget(String ownerUuid, String ownerName) {

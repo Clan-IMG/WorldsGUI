@@ -14,9 +14,12 @@ api:
   # Standard: alle online Server aus SimpleCloud sind erlaubt/werden angezeigt.
   # Nur hier eintragen, wenn einzelne Server NICHT auswählbar sein sollen.
   blocked-server-names:
-    - "lobby-1"
-    - "lobby-2"
+    - "lobby"
     - "plotwelt"
+
+  # Server, auf dem ALLE Ticket-Welten (Aufträge) erstellt werden - egal auf welchem Server
+  # der Auftrag angelegt oder /nav geöffnet wird. Leer = wie früher automatisch.
+  ticket_server: "build"
 
   # Optional override für die lokale Server-ID.
   # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
