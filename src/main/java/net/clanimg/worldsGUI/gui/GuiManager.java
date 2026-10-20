@@ -58,6 +58,7 @@ import net.clanimg.worldsGUI.guiconfig.GuiSlotRangeDefinition;
 import net.clanimg.worldsGUI.guiconfig.GuiToggleState;
 import net.clanimg.worldsGUI.guiconfig.GuiTrigger;
 import net.clanimg.worldsGUI.guiconfig.TriggerType;
+import net.clanimg.worldsGUI.idle.IdleWorldUnloader;
 import net.clanimg.worldsGUI.guiconfig.SlotMapper;
 import net.clanimg.worldsGUI.guiruntime.PlaceholderExpander;
 import net.clanimg.worldsGUI.guiruntime.PlayerGuiSession;
@@ -165,6 +166,7 @@ public final class GuiManager {
 
     private final WorldsGUI plugin;
     private final WorldsRepository repository;
+    private final IdleWorldUnloader idleWorldUnloader;
     private final NamespacedKey worldKey;
     private FileConfiguration messagesConfig;
     private FileConfiguration worldDefaultsConfig;
@@ -185,9 +187,10 @@ public final class GuiManager {
     private final BackupService backupService;
     private final WorldGenerationDebug generationDebug;
 
-    public GuiManager(WorldsGUI plugin, WorldsRepository repository) {
+    public GuiManager(WorldsGUI plugin, WorldsRepository repository, IdleWorldUnloader idleWorldUnloader) {
         this.plugin = plugin;
         this.repository = repository;
+        this.idleWorldUnloader = idleWorldUnloader;
         this.generationDebug = new WorldGenerationDebug(plugin);
         this.worldKey = new NamespacedKey(plugin, "world_name");
         this.messagesConfig = loadMessagesConfig();
@@ -2324,6 +2327,7 @@ public final class GuiManager {
             online.teleport(world.getSpawnLocation());
             online.setGameMode(resolvePreferredGameMode(online, null));
             send(online, "autocreate.teleport-success");
+            idleWorldUnloader.trackPrivateWorld(worldName);
         }, 80L);
     }
 
@@ -3683,6 +3687,10 @@ public final class GuiManager {
         if (notify) {
             send(player, "join-success", "%world%", worldName);
         }
+        if ("private".equals(entry.sourceType())) {
+            // einem einzelnen Besitzer gehörende Welt - für idle-unload vormerken
+            idleWorldUnloader.trackPrivateWorld(worldName);
+        }
         return true;
     }
 
@@ -4432,6 +4440,11 @@ public final class GuiManager {
         applyPreferredGameMode(player, entry);
         if (notify) {
             send(player, "join-success", "%world%", worldName);
+        }
+        if ("private".equals(entry.sourceType())) {
+            // einem einzelnen Besitzer gehörende Welt, z.B. erneut betreten über /nav - für
+            // idle-unload vormerken (öffentliche/Ticket-Welten mit mehreren Kunden nie)
+            idleWorldUnloader.trackPrivateWorld(worldName);
         }
         return true;
     }

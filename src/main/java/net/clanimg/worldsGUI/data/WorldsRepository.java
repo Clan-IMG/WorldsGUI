@@ -9,6 +9,7 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
+import java.net.http.HttpTimeoutException;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -23,14 +24,18 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class WorldsRepository {
     private static final long WARNING_COOLDOWN_MS = 30_000L;
+    private static final int CIRCUIT_FAILURE_THRESHOLD = 2;
+    private static final long CIRCUIT_OPEN_MS = 15_000L;
 
     private final JavaPlugin plugin;
     private String apiBaseUrl;
     private String apiToken;
-    private HttpClient httpClient;
+    private volatile HttpClient httpClient;
+    private Duration connectTimeout;
     private Duration requestTimeout;
     private final Gson gson;
     private final Map<String, Long> warningCooldowns = new ConcurrentHashMap<>();
+    private final Map<String, ApiCircuit> circuits = new ConcurrentHashMap<>();
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
@@ -46,10 +51,9 @@ public final class WorldsRepository {
         this.plugin = plugin;
         this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
         this.apiToken = apiToken;
+        this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
-        this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(connectTimeout)
-            .build();
+        this.httpClient = buildHttpClient(connectTimeout);
         this.gson = new Gson();
     }
 
@@ -61,10 +65,30 @@ public final class WorldsRepository {
     ) {
         this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
         this.apiToken = apiToken;
+        this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
-        this.httpClient = HttpClient.newBuilder()
+        this.httpClient = buildHttpClient(connectTimeout);
+    }
+
+    /**
+     * HTTP/1.1 statt des HTTP/2-Defaults: Bei HTTP/2 laufen alle Requests über eine einzige Verbindung.
+     * Wird die stillschweigend getrennt (NAT/Proxy), hängt jeder Request bis zum Timeout, bis der Kernel
+     * die Verbindung nach Minuten verwirft. Bei HTTP/1.1 wird die Verbindung beim Timeout geschlossen.
+     */
+    private static HttpClient buildHttpClient(Duration connectTimeout) {
+        return HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(connectTimeout)
             .build();
+    }
+
+    /** Verwirft alle gepoolten Verbindungen, damit nach einem Timeout keine toten Verbindungen wiederverwendet werden. */
+    private synchronized void resetHttpClient(HttpClient failedClient) {
+        if (httpClient == failedClient) {
+            httpClient = buildHttpClient(connectTimeout);
+            failedClient.shutdown();
+            plugin.getLogger().warning("API-Request timed out - HTTP-Verbindungen werden neu aufgebaut.");
+        }
     }
 
     public boolean initialize() {
@@ -914,7 +938,28 @@ public final class WorldsRepository {
             }
         }
 
-        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        ApiCircuit circuit = circuits.computeIfAbsent(trimTrailingSlash(baseUrl), key -> new ApiCircuit());
+        if (circuit.isOpen()) {
+            throw new IOException("API nicht erreichbar, nächster Versuch in " + circuit.remainingSeconds() + "s");
+        }
+
+        HttpClient client = httpClient;
+        HttpResponse<String> response;
+        try {
+            response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (IOException ex) {
+            if (ex instanceof HttpTimeoutException) {
+                resetHttpClient(client);
+            }
+            if (circuit.recordFailure()) {
+                plugin.getLogger().warning("API " + baseUrl + " antwortet nicht (" + ex.getMessage()
+                    + ") - Requests werden für " + (CIRCUIT_OPEN_MS / 1000) + "s sofort abgebrochen, damit der Server nicht blockiert.");
+            }
+            throw ex;
+        }
+        if (circuit.recordSuccess()) {
+            plugin.getLogger().info("API " + baseUrl + " ist wieder erreichbar.");
+        }
         return new ApiResponse(response.statusCode(), response.body() == null ? "" : response.body());
     }
 
@@ -1125,6 +1170,42 @@ public final class WorldsRepository {
                 return statusCode == 0 ? "api-unreachable" : "";
             }
             return json.get("detail").getAsString();
+        }
+    }
+
+    /**
+     * Circuit-Breaker: Nach mehreren Netzwerkfehlern in Folge werden Requests eine Zeit lang sofort abgelehnt,
+     * statt jeden Aufrufer (oft den Main-Thread) bis zum Timeout blockieren zu lassen.
+     */
+    private static final class ApiCircuit {
+        private int consecutiveFailures;
+        private long openUntilMillis;
+
+        synchronized boolean isOpen() {
+            return System.currentTimeMillis() < openUntilMillis;
+        }
+
+        synchronized long remainingSeconds() {
+            return Math.max(1, (openUntilMillis - System.currentTimeMillis() + 999) / 1000);
+        }
+
+        /** @return true, wenn der Circuit durch diesen Fehler (erneut) geöffnet wurde und zuvor geschlossen war. */
+        synchronized boolean recordFailure() {
+            consecutiveFailures++;
+            if (consecutiveFailures < CIRCUIT_FAILURE_THRESHOLD) {
+                return false;
+            }
+            boolean wasClosed = consecutiveFailures == CIRCUIT_FAILURE_THRESHOLD;
+            openUntilMillis = System.currentTimeMillis() + CIRCUIT_OPEN_MS;
+            return wasClosed;
+        }
+
+        /** @return true, wenn der Circuit vorher offen war (API wieder erreichbar). */
+        synchronized boolean recordSuccess() {
+            boolean wasOpen = consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD;
+            consecutiveFailures = 0;
+            openUntilMillis = 0L;
+            return wasOpen;
         }
     }
 }

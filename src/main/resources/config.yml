@@ -3,8 +3,8 @@ api:
   base-url: "https://worldsgui.clan-img.net"
   token: ""
   # HTTP timeout settings for API calls from the Minecraft server.
-  connect-timeout-seconds: 10
-  request-timeout-seconds: 20
+  connect-timeout-seconds: 3
+  request-timeout-seconds: 5
   # Optional: Base URL for profile/verify endpoints.
   # Set this to api.clan-img.net if /verify is handled by the main API service.
   profile-base-url: "https://api.clan-img.net"
@@ -15,9 +15,8 @@ api:
   # erlaubten Servern bleiben verfügbar. Namen werden exakt verglichen (ohne Beachtung
   # der Groß-/Kleinschreibung): lobby-1 und lobby-2 sind unterschiedliche Server.
   blocked-server-names:
-    - "lobby-1"
-    - "lobby-2"
     - "plotwelt"
+    - "lobby"
 
   # Optional override für die lokale Server-ID.
   # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
@@ -77,6 +76,24 @@ backup:
 
   # Zeitzone für die im GUI angezeigten Backup-Zeiten.
   display-timezone: "Europe/Berlin"
+
+idle-unload:
+  # Entlädt eine private Einzelspieler-Welt automatisch, sobald niemand mehr darin ist - aber
+  # nicht sofort, erst nach delay-seconds ohne Spieler (schützt vor sofortigem Neuladen bei
+  # kurzem Disconnect/Reconnect, z.B. Lag oder Clientabsturz). Betrifft NUR private Welten mit
+  # genau einem Besitzer (die beim ersten Join automatisch angelegten); öffentliche Welten,
+  # Ticket-Welten mit mehreren Kunden und die Lobby-/Hauptwelt werden nie automatisch entladen.
+  # Hintergrund: ohne dieses Feature bleibt jede je erstellte private Welt dauerhaft im
+  # Arbeitsspeicher geladen, auch nachdem ihr Besitzer den Server verlassen hat - bei vielen
+  # verschiedenen Spielern (nicht nur gleichzeitigen) wächst der Speicherverbrauch dadurch
+  # unbegrenzt weiter.
+  enabled: true
+
+  # Wie lange eine private Welt leer sein muss, bevor sie entladen wird (mindestens 30).
+  delay-seconds: 300
+
+  # Wie oft geprüft wird, ob eine beobachtete Welt mittlerweile entladen werden darf (mindestens 10).
+  check-interval-seconds: 60
 
 hoover-dialog:
   title: "&r&b%displayname%"
