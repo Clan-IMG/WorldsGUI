@@ -3515,7 +3515,9 @@ public final class GuiManager {
         runPostCreateCommands(created);
 
         ConsoleCommandSender console = Bukkit.getConsoleSender();
-        generationDebug.dispatchCommand("createWorld.import@GuiManager:3425", console, "mv import " + worldName + " normal");
+        // Ohne --generator speichert Multiverse "generator: ''" und lädt Void-Welten nach dem Restart mit Vanilla-Generierung.
+        String importCommand = "mv import " + worldName + " normal" + (voidWorld ? " --generator VoidGen" : "");
+        generationDebug.dispatchCommand("createWorld.import@GuiManager:3425", console, importCommand);
 
         // Title sofort zeigen
         String creatingTitle = configuredMessageLine("create-creating-title", "Welt wird erstellt...");
