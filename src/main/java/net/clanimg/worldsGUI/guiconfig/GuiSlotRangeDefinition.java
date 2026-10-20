@@ -8,6 +8,8 @@ import java.util.List;
  * trusted-players, luckperms-players, world-backups-auto); kann null sein, wenn kein Provider definiert ist.
  * "lore" sind optionale Beschreibungszeilen je generiertem Item. "emptyMaterial"/"emptyTitle"
  * (optional) füllen Slots des Bereichs, für die es kein generiertes Item gibt.
+ * "requiresPlugin" (optional, Feld "requires-plugin"): ist dieses Plugin nicht aktiv, liefert der
+ * Bereich keine Items (nur ggf. empty-material) und keine Klick-Aktionen.
  */
 public record GuiSlotRangeDefinition(
     int from,
@@ -19,10 +21,27 @@ public record GuiSlotRangeDefinition(
     List<String> lore,
     String emptyMaterial,
     String emptyTitle,
-    GuiAction action
+    GuiAction action,
+    String requiresPlugin
 ) {
     public GuiSlotRangeDefinition {
         lore = lore == null ? List.of() : List.copyOf(lore);
+        requiresPlugin = requiresPlugin == null || requiresPlugin.isBlank() ? null : requiresPlugin.trim();
+    }
+
+    public GuiSlotRangeDefinition(
+        int from,
+        int to,
+        String source,
+        String filter,
+        String material,
+        String title,
+        List<String> lore,
+        String emptyMaterial,
+        String emptyTitle,
+        GuiAction action
+    ) {
+        this(from, to, source, filter, material, title, lore, emptyMaterial, emptyTitle, action, null);
     }
 
     public GuiSlotRangeDefinition(
@@ -34,6 +53,6 @@ public record GuiSlotRangeDefinition(
         String title,
         GuiAction action
     ) {
-        this(from, to, source, filter, material, title, List.of(), null, null, action);
+        this(from, to, source, filter, material, title, List.of(), null, null, action, null);
     }
 }

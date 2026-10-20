@@ -1,22 +1,26 @@
 api:
   # Base URL for worlds endpoints (without trailing slash)
   base-url: "https://worldsgui.clan-img.net"
-  token: ""
+  token: "{{ secrets.WORLDSGUI_API_TOKEN }}"
   # HTTP timeout settings for API calls from the Minecraft server.
   connect-timeout-seconds: 3
   request-timeout-seconds: 5
   # Optional: Base URL for profile/verify endpoints.
   # Set this to api.clan-img.net if /verify is handled by the main API service.
   profile-base-url: "https://api.clan-img.net"
-  profile-token: ""
+  profile-token: "{{ secrets.CLANIMG_API_TOKEN }}"
 
   # Auf diesen Servern erstellt WorldsGUI keine Welten (auch keine Auto-/Ticket-Welten).
   # Sie sind als Erstellungsziel nicht auswählbar; /nav und die Erstellung auf anderen
   # erlaubten Servern bleiben verfügbar. Namen werden exakt verglichen (ohne Beachtung
   # der Groß-/Kleinschreibung): lobby-1 und lobby-2 sind unterschiedliche Server.
   blocked-server-names:
-    - "plotwelt"
     - "lobby"
+    - "plotwelt"
+
+  # Server, auf dem ALLE Ticket-Welten (Aufträge) erstellt werden - egal auf welchem Server
+  # der Auftrag angelegt oder /nav geöffnet wird. Leer = wie früher automatisch.
+  ticket_server: "build"
 
   # Optional override für die lokale Server-ID.
   # Setze diesen Wert, wenn die Laufzeit-ID (z.B. build-1 oder HOSTNAME)
@@ -36,8 +40,8 @@ luckperms:
 simplecloud:
   # Controller API endpoint and credentials for player transfer
   controller-url: "https://controller.simplecloud.app"
-  network-id: ""
-  network-secret: ""
+  network-id: "{{ env.SC_NETWORK_ID }}"
+  network-secret: "{{ secrets.SC_NETWORK_SECRET }}"
   lobby-server-id: "lobby-1"
 
 backup:

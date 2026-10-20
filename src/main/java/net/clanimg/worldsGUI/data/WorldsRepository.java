@@ -39,6 +39,8 @@ public final class WorldsRepository {
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
+    /** failed = API nicht erreichbar/Fehler; dann ist unbekannt, ob die Welt existiert. */
+    public record WorldLookup(boolean failed, Optional<WorldEntry> entry) {}
     public record OrderSummary(String orderId, String customerName) {}
 
     public WorldsRepository(
@@ -388,26 +390,34 @@ public final class WorldsRepository {
     }
 
     public Optional<WorldEntry> findByWorldName(String worldName) {
+        return lookupWorld(worldName).entry();
+    }
+
+    /**
+     * Wie findByWorldName, unterscheidet aber "existiert nicht" (404) von einem API-Fehler -
+     * wichtig überall dort, wo "nicht gefunden" dazu führt, dass eine Welt neu angelegt wird.
+     */
+    public WorldLookup lookupWorld(String worldName) {
         try {
             ApiResponse response = request("GET", "/worlds/" + encode(worldName), null);
             if (response.statusCode() == 404) {
-                return Optional.empty();
+                return new WorldLookup(false, Optional.empty());
             }
             if (response.statusCode() / 100 != 2) {
                 warnThrottled("findByWorldName", "findByWorldName API Fehler: HTTP " + response.statusCode());
-                return Optional.empty();
+                return new WorldLookup(true, Optional.empty());
             }
             JsonObject json = parseObject(response.body());
             JsonObject world = json.has("world") && json.get("world").isJsonObject()
                 ? json.getAsJsonObject("world")
                 : null;
             if (world == null) {
-                return Optional.empty();
+                return new WorldLookup(false, Optional.empty());
             }
-            return Optional.of(mapEntry(world));
+            return new WorldLookup(false, Optional.of(mapEntry(world)));
         } catch (Exception ex) {
             warnThrottled("findByWorldName-ex", "Fehler beim Laden der Weltdaten via API: " + ex.getMessage());
-            return Optional.empty();
+            return new WorldLookup(true, Optional.empty());
         }
     }
 
@@ -445,14 +455,14 @@ public final class WorldsRepository {
         patchOrWarn("/worlds/" + encode(worldName) + "/icon", body);
     }
 
-    public void setSpawn(String worldName, Location loc) {
+    public boolean setSpawn(String worldName, Location loc) {
         JsonObject body = new JsonObject();
         body.addProperty("x", loc.getX());
         body.addProperty("y", loc.getY());
         body.addProperty("z", loc.getZ());
         body.addProperty("yaw", loc.getYaw());
         body.addProperty("pitch", loc.getPitch());
-        patchOrWarn("/worlds/" + encode(worldName) + "/spawn", body);
+        return patchOrWarn("/worlds/" + encode(worldName) + "/spawn", body);
     }
 
     public void deleteWorld(String worldName) {

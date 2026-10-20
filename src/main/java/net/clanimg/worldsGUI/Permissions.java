@@ -27,6 +27,8 @@ public final class Permissions {
     public static final String NAV_TRUST = "worldsgui.command.nav.trust";
     public static final String NAV_UNTRUST = "worldsgui.command.nav.untrust";
     public static final String NAV_SETSPAWN = "worldsgui.command.nav.setspawn";
+    /** Zusätzlich nötig, um den Spawn einer Ticket-Welt (Auftrag) zu setzen. */
+    public static final String NAV_SETSPAWN_TICKET = "worldsgui.command.nav.setspawn.ticket";
     public static final String NAV_STATUS = "worldsgui.command.nav.status";
     public static final String NAV_RENAME = "worldsgui.command.nav.rename";
     public static final String NAV_ICON = "worldsgui.command.nav.icon";

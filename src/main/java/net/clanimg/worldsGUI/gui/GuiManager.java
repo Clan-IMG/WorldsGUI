@@ -118,21 +118,6 @@ public final class GuiManager {
     private static final int CREATE_OPTIONS_SIZE = 27;
     private static final int PAGE_SIZE = 36;
     private static final int WORLD_BORDER_BLOCKS = 29_999_984;
-    private static final java.util.Set<String> RUNTIME_GUI_IDS = java.util.Set.of(
-        "confirm",
-        "create-world",
-        "select-server",
-        "my-worlds",
-        "edit-world",
-        "invited-worlds",
-        "invited-friends",
-        "trusted-friends",
-        "select-friend",
-        "edit-friend",
-        "world-backups",
-        "tickets",
-        "archived-tickets"
-    );
     private static final Pattern WORLD_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_\\-]{3,32}$");
     private static final Pattern ORDER_LABEL_PATTERN = Pattern.compile("^A\\d{3}$");
     private static final Pattern GENERATED_WORLD_NAME_PATTERN = Pattern.compile("^.+-(\\d{4})$");
@@ -309,20 +294,27 @@ public final class GuiManager {
 
     /**
      * Zentraler Einstiegspunkt zum Öffnen eines GUIs über eine gui-id (aus guis.yml Triggern
-     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). GUIs aus {@link #RUNTIME_GUI_IDS}
-     * werden über die neue Runtime-Engine gerendert; alle anderen bekannten IDs fallen (Hybrid-Rollout)
-     * vorerst auf die bestehende, hardcodierte Java-GUI-Logik zurück.
+     * wie open-gui/return/select, oder direkt vom Legacy-Code aus). Jede in guis.yml definierte
+     * gui-id wird über die Runtime-Engine gerendert; unbekannte IDs werden nur geloggt.
      */
     private void openGui(Player player, String guiId) {
         if (guiId == null || guiId.isBlank()) {
             return;
         }
         String normalized = guiId.trim().toLowerCase(Locale.ROOT);
-        if (RUNTIME_GUI_IDS.contains(normalized)) {
+        if (guiConfig == null || guiConfig.get(normalized).isPresent()) {
             openRuntimeGui(player, normalized);
             return;
         }
-        plugin.getLogger().warning("GUI '" + guiId + "' wird von der neuen guis.yml-Engine noch nicht unterstützt.");
+        plugin.getLogger().warning("GUI '" + guiId + "' ist in guis.yml nicht definiert.");
+    }
+
+    /**
+     * true, wenn ein Slot per "requires-plugin" ein Plugin voraussetzt, das gerade nicht aktiv ist.
+     */
+    private boolean isRequiredPluginMissing(String requiresPlugin) {
+        return requiresPlugin != null && !requiresPlugin.isBlank()
+            && !Bukkit.getPluginManager().isPluginEnabled(requiresPlugin);
     }
 
     private void openRuntimeGui(Player player, String guiId) {
@@ -356,7 +348,7 @@ public final class GuiManager {
             int absolute = SlotMapper.mapRowSlotToAbsolute(rowSlot, definition.position(), definition.size());
             GuiSlotDefinition slotDefinition = definition.rowSlots().get(rowSlot);
 
-            if (slotDefinition == null) {
+            if (slotDefinition == null || isRequiredPluginMissing(slotDefinition.requiresPlugin())) {
                 inventory.setItem(absolute, namedItem(Material.GRAY_STAINED_GLASS_PANE, ""));
                 continue;
             }
@@ -395,7 +387,9 @@ public final class GuiManager {
 
     private void renderSlotRange(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player, PlayerGuiSession session) {
         for (GuiSlotRangeDefinition range : definition.slotRanges()) {
-            List<Map<String, String>> items = resolveSlotRangeItems(range, player, session);
+            List<Map<String, String>> items = isRequiredPluginMissing(range.requiresPlugin())
+                ? List.of()
+                : resolveSlotRangeItems(range, player, session);
             int slotCount = range.to() - range.from() + 1;
             for (int i = 0; i < slotCount; i++) {
                 int absolute = range.from() + i;
@@ -894,13 +888,24 @@ public final class GuiManager {
             return;
         }
 
+        WorldsRepository.WorldLookup existing = repository.lookupWorld(normalizedOrder);
+        if (existing.failed()) {
+            sendWithPrefix(player, "create.ticket-lookup-failed", "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal.");
+            return;
+        }
+        if (existing.entry().isPresent()) {
+            // Nie erneut anlegen: die API würde den Server der bestehenden Ticket-Welt überschreiben.
+            send(player, "world.already-exists");
+            return;
+        }
+
         List<String> customers = repository.getOrderSummary(normalizedOrder)
             .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
                 ? List.<String>of()
                 : List.of(summary.customerName().trim()))
             .orElse(List.of());
 
-        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder, customers);
+        createWorld(player, normalizedOrder, normalizedOrder, false, "ticket", normalizedOrder, customers, false, false, true, resolveTicketCreationServer());
     }
 
     public void syncAssignedTicketWorlds(Player player) {
@@ -922,15 +927,28 @@ public final class GuiManager {
             List<PendingTicketWorld> worldsToCreate = new ArrayList<>();
 
             for (String orderId : orderIds) {
+                WorldsRepository.WorldLookup lookup = repository.lookupWorld(orderId);
+                if (lookup.failed()) {
+                    // Unklar, ob/wo die Welt schon existiert - lieber nichts anlegen, als eine
+                    // bestehende Ticket-Welt auf einen anderen Server umzuschreiben.
+                    continue;
+                }
+                Optional<WorldEntry> existing = lookup.entry();
+                if (existing.isPresent()) {
+                    // Existiert bereits (egal auf welchem Server): nie lokal neu anlegen. Früher
+                    // passierte das auf jedem Server, auf dem ein Builder /nav öffnete - die API
+                    // überschrieb dabei den Server und die Welt fehlte auf dem eigentlichen Server.
+                    if (existing.get().isArchived()) {
+                        repository.unarchiveWorld(orderId);
+                    }
+                    continue;
+                }
                 List<String> customers = repository.getOrderSummary(orderId)
                     .map(summary -> summary.customerName() == null || summary.customerName().isBlank()
                         ? List.<String>of()
                         : List.of(summary.customerName().trim()))
                     .orElse(List.of());
-                boolean archived = repository.findByWorldName(orderId)
-                    .map(WorldEntry::isArchived)
-                    .orElse(false);
-                worldsToCreate.add(new PendingTicketWorld(orderId, customers, archived));
+                worldsToCreate.add(new PendingTicketWorld(orderId, customers));
             }
 
             if (worldsToCreate.isEmpty()) {
@@ -943,8 +961,15 @@ public final class GuiManager {
                     return;
                 }
 
+                String ticketServer = resolveTicketCreationServer();
+                String localServer = resolveLocalServerId();
+                // Ohne eindeutige lokale Server-ID erstellt createWorld nichts lokal
+                // (ServerCreationPolicy) - dann ebenfalls nur auf dem Ticket-Server anmelden.
+                boolean createHere = ticketServer == null
+                    || isSameServerIdentifier(ticketServer, localServer);
+
                 for (PendingTicketWorld world : worldsToCreate) {
-                    if (Bukkit.getWorld(world.worldName()) == null) {
+                    if (createHere) {
                         createWorld(
                             onlinePlayer,
                             world.worldName(),
@@ -952,10 +977,14 @@ public final class GuiManager {
                             false,
                             "ticket",
                             world.worldName(),
-                            world.customers()
+                            world.customers(),
+                            false,
+                            false,
+                            true,
+                            ticketServer
                         );
-                    } else if (world.archived()) {
-                        repository.unarchiveWorld(world.worldName());
+                    } else {
+                        queueTicketWorldOnServer(onlinePlayer, world.worldName(), world.customers(), ticketServer);
                     }
                 }
             });
@@ -2042,7 +2071,7 @@ public final class GuiManager {
             return;
         }
 
-        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder, List.of());
+        createWorld(player, normalizedWorld, normalizedOrder, false, "ticket", normalizedOrder, List.of(), false, false, true, resolveTicketCreationServer());
     }
 
     /**
@@ -2936,35 +2965,66 @@ public final class GuiManager {
     }
 
     private void handleSetSpawn(Player player, String forcedWorldName) {
-        String worldName = forcedWorldName != null && !forcedWorldName.isBlank()
-            ? forcedWorldName
-            : resolveContextWorld(player);
-        if (worldName == null) {
-            send(player, "no-selected-world");
-            return;
-        }
-
-        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
-        if (entryOpt.isEmpty()) {
-            send(player, "world-not-found");
-            return;
-        }
-        WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString())) {
-            send(player, "not-world-owner");
-            return;
-        }
-
-        if (!player.getWorld().getName().equals(worldName)) {
+        // Der Spawn wird dort gesetzt, wo man steht - ohne Angabe also in der aktuellen Welt
+        // (früher die im Menü gewählte Welt, was bei Ticket-Welten nie gegriffen hat).
+        String currentWorld = player.getWorld().getName();
+        if (forcedWorldName != null && !forcedWorldName.isBlank() && !forcedWorldName.trim().equalsIgnoreCase(currentWorld)) {
             send(player, "setspawn-not-in-world");
             return;
         }
 
-        Location loc = player.getLocation();
-        World world = player.getWorld();
-        world.setSpawnLocation(loc);
-        repository.setSpawn(worldName, loc);
-        send(player, "setspawn-success");
+        Location loc = player.getLocation().clone();
+        UUID playerId = player.getUniqueId();
+        boolean admin = player.hasPermission(Permissions.ADMIN);
+        boolean ticketAllowed = admin || player.hasPermission(Permissions.NAV_SETSPAWN_TICKET);
+
+        // API-Aufrufe nicht im Haupt-Thread: hängt die API, friert sonst der ganze Server ein.
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            WorldsRepository.WorldLookup lookup = repository.lookupWorld(currentWorld);
+            String denialKey = null;
+            String denialFallback = null;
+            if (lookup.failed()) {
+                denialKey = "setspawn-api-unreachable";
+                denialFallback = "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal.";
+            } else if (lookup.entry().isEmpty()) {
+                denialKey = "world-not-found";
+            } else if (isTicketWorld(lookup.entry().get())) {
+                if (!ticketAllowed) {
+                    denialKey = "setspawn-ticket-no-permission";
+                    denialFallback = "Für Ticket-Welten fehlt dir die Berechtigung, den Spawn zu setzen.";
+                }
+            } else if (!admin && !lookup.entry().get().ownerUuid().equals(playerId.toString())) {
+                denialKey = "not-world-owner";
+            }
+
+            boolean saved = denialKey == null && repository.setSpawn(currentWorld, loc);
+            String finalDenialKey = denialKey;
+            String finalDenialFallback = denialFallback;
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+                if (finalDenialKey != null) {
+                    if (finalDenialFallback != null) {
+                        sendWithPrefix(online, finalDenialKey, finalDenialFallback);
+                    } else {
+                        send(online, finalDenialKey);
+                    }
+                    return;
+                }
+                if (!saved) {
+                    sendWithPrefix(online, "setspawn-api-unreachable", "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal.");
+                    return;
+                }
+                World world = Bukkit.getWorld(currentWorld);
+                if (world != null) {
+                    world.setSpawnLocation(loc);
+                }
+                send(online, "setspawn-success");
+            });
+        });
     }
 
     private void handleRenameCommand(Player player, String[] args) {
@@ -4535,6 +4595,64 @@ public final class GuiManager {
         return resolveLocalServerId();
     }
 
+    /**
+     * Ziel-Server für neue Ticket-Welten (config: api.ticket_server). Ticket-Welten liegen immer auf
+     * genau diesem einen Server, egal auf welchem Server der Auftrag angestoßen wird.
+     *
+     * @return null, wenn nichts konfiguriert ist (dann wie bisher automatisch bestimmt); die lokale
+     *         Server-ID, wenn dieser Server der Ticket-Server ist; sonst der konfigurierte Name.
+     */
+    private String resolveTicketCreationServer() {
+        // Bewusst ohne expliziten Fallback: so greift der Default aus der config.yml im Jar auch auf
+        // Servern, deren config.yml (wird beim Update nie überschrieben) den Key noch nicht hat.
+        String configured = plugin.getConfig().getString("api.ticket_server");
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+
+        String ticketServer = configured.trim();
+        String localServer = resolveLocalServerId();
+        if (!localServer.isBlank() && isSameServerIdentifier(ticketServer, localServer)) {
+            return localServer;
+        }
+        return ticketServer;
+    }
+
+    /**
+     * Legt nur die Metadaten einer Ticket-Welt mit dem Ticket-Server als Ziel an. Die Welt selbst
+     * erstellt der Ticket-Server (syncOpenTicketWorlds). Der Spieler wird dabei NICHT verbunden,
+     * weil das hier aus dem automatischen Abgleich beim Öffnen von /nav kommt.
+     */
+    private void queueTicketWorldOnServer(Player player, String worldName, List<String> customers, String server) {
+        if (isBlockedServerName(server)) {
+            send(player, "create.blocked-server", "%server%", server);
+            return;
+        }
+        int nextIndex = resolveMetadataWorldIndex(player, worldName);
+        persistWorldMetadataWithRetry(
+            player.getUniqueId(),
+            player.getName(),
+            worldName,
+            worldName,
+            worldName,
+            "ticket",
+            customers,
+            nextIndex,
+            false,
+            3,
+            false,
+            false,
+            server
+        );
+        sendWithPrefix(
+            player,
+            "create.ticket-queued",
+            "Ticket-Welt %world% wird auf %server% erstellt.",
+            "%world%", worldName,
+            "%server%", server
+        );
+    }
+
     private String resolveTargetCreationServer() {
         String localServer = resolveLocalServerId();
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
@@ -5737,7 +5855,7 @@ public final class GuiManager {
     private record PendingDeleteConfirmation(String worldName, int code, long expiresAtEpochMs, boolean archiveOnly) {
     }
 
-    private record PendingTicketWorld(String worldName, List<String> customers, boolean archived) {
+    private record PendingTicketWorld(String worldName, List<String> customers) {
     }
 
     private record CloneTarget(String ownerUuid, String ownerName) {

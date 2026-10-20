@@ -320,7 +320,19 @@ public final class NavCommand implements TabExecutor {
             if (sub.equals("confirm")) {
                 return List.of("<code>");
             }
-            if (sub.equals("setspawn") || sub.equals("status") || sub.equals("rename") || sub.equals("icon") || sub.equals("delete")) {
+            if (sub.equals("setspawn")) {
+                // Gesetzt wird immer in der Welt, in der man steht - die zuerst vorschlagen
+                // (auch Ticket-Welten, die nicht unter den eigenen Welten auftauchen).
+                List<String> suggestions = new ArrayList<>();
+                suggestions.add(((Player) sender).getWorld().getName());
+                for (String owned : guiManager.listOwnedWorldNames((Player) sender)) {
+                    if (!suggestions.contains(owned)) {
+                        suggestions.add(owned);
+                    }
+                }
+                return filterPrefix(suggestions, args[1]);
+            }
+            if (sub.equals("status") || sub.equals("rename") || sub.equals("icon") || sub.equals("delete")) {
                 return filterPrefix(guiManager.listOwnedWorldNames((Player) sender), args[1]);
             }
             if (sub.equals("create")) {

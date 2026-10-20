@@ -138,6 +138,10 @@
 # Zusätzliche optionale Felder (bei slot-range UND bei slot-1..slot-9):
 #   lore:                  # Beschreibungszeilen (Liste), Platzhalter und &-Farbcodes erlaubt
 #     - "&7Größe: &f%backup_size%"
+#   requires-plugin: ""    # Name eines Plugins (z.B. "MapMaker"). Ist dieses Plugin nicht
+#                          # installiert bzw. nicht aktiv, wird der Slot wie ein leerer Slot
+#                          # dargestellt (GRAY_STAINED_GLASS_PANE ohne Aktion). Bei slot-range
+#                          # bleibt der Bereich leer (nur empty-material, ohne Aktion).
 #
 # Nur bei slot-range:
 #   empty-material: ""     # Item für Slots des Bereichs, für die es KEIN generiertes Item gibt
@@ -329,6 +333,15 @@ guis:
         action:
           trigger: "open-gui"
           gui-id: "world-backups"
+      slot-8:
+        material: "SPECTRAL_ARROW"
+        title: "&fWeitere Optionen"
+        requires-plugin: "MapMaker"
+        lore:
+          - "&7Seite 2: MapMaker Studio"
+        action:
+          trigger: "open-gui"
+          gui-id: "edit-world-more"
       slot-9:
         material: "BARRIER"
         title: "Löschen"
@@ -337,6 +350,35 @@ guis:
           gui-id: "confirm"
           params:
             confirm-command: "nav my-world delete %world% confirm"
+
+  # Seite 2 von edit-world (nur sichtbar, wenn das Plugin MapMaker aktiv ist).
+  # "In Studio öffnen" führt als Spieler /mapmaker studio <welt> aus; der Spieler erhält
+  # daraufhin einen Link + Code im Chat (das Inventar wird dabei geschlossen).
+  edit-world-more:
+    gui-size: 27
+    title: "Welt bearbeiten · Seite 2"
+    position: middle
+    return-gui-id: "edit-world"
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-5:
+        material: "FILLED_MAP"
+        title: "&bIn Studio öffnen"
+        requires-plugin: "MapMaker"
+        lore:
+          - "&7Öffnet diese Welt im MapMaker Studio"
+          - "&7in deinem Browser: 2D-Karte, 3D-Ansicht"
+          - "&7und Sounds in der Welt platzieren."
+          - ""
+          - "&eKlick &7» Link im Chat erhalten"
+        action:
+          trigger: "command"
+          command: "mapmaker studio %world%"
+          chat-feedback: true
 
   # Backups der ausgewählten Welt (edit-world -> Backups).
   # Reihe 1: 7 automatische Backups (nachts 00:00 Uhr, nur wenn sich die Welt geändert hat,

@@ -1,3 +1,5 @@
 # Project exclude paths
 /.gradle/
 /build/
+# Von der IDE (VS Code/Eclipse) kompilierte Klassen
+/bin/

@@ -15,12 +15,13 @@ dependencies {
     compileOnly("com.sk89q.worldguard:worldguard-bukkit:7.0.17")
     compileOnly("com.sk89q.worldedit:worldedit-bukkit:7.3.18")
     implementation("com.google.code.gson:gson:2.11.0")
+    testImplementation("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
 }
 
 tasks {
