@@ -2294,7 +2294,8 @@ public final class GuiManager {
         handleIconCommand(player, worldName, args);
     }
 
-    public void ensurePersonalFlatWorldForJoin(Player player) {
+    /** @param knownOwnWorlds the player's worlds, empty when the API could not be asked */
+    public void ensurePersonalFlatWorldForJoin(Player player, Optional<List<WorldEntry>> knownOwnWorlds) {
         if (!canCreateWorldsLocally()) {
             return;
         }
@@ -2311,7 +2312,15 @@ public final class GuiManager {
             return;
         }
 
-        List<WorldEntry> ownWorlds = repository.listOwnWorlds(player.getUniqueId().toString());
+        // Without an answer from the API it is unknown whether the player has a world – never create one blindly.
+        if (knownOwnWorlds.isEmpty()) {
+            plugin.getLogger().warning(
+                "Auto-Welt-Erstellung beim Join für " + player.getName()
+                    + " übersprungen: eigene Welten konnten nicht von der API geladen werden."
+            );
+            return;
+        }
+        List<WorldEntry> ownWorlds = knownOwnWorlds.get();
         boolean hasEligibleWorld;
         if (localServer.isBlank()) {
             if (!warnedMissingExplicitServerIdForAutoCreate) {
@@ -2668,20 +2677,24 @@ public final class GuiManager {
             return;
         }
 
+        UUID playerId = player.getUniqueId();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String pendingWorldName = repository.consumePendingWorldTransfer(player.getName());
+            boolean pending = pendingWorldName != null && !pendingWorldName.isBlank();
+            // asked here, off the server thread: the API may be slow or unreachable
+            Optional<List<WorldEntry>> ownWorlds = pending ? Optional.of(List.of()) : repository.tryListOwnWorlds(playerId.toString());
             Bukkit.getScheduler().runTask(plugin, () -> {
-                Player online = Bukkit.getPlayer(player.getUniqueId());
+                Player online = Bukkit.getPlayer(playerId);
                 if (online == null || !online.isOnline()) {
                     return;
                 }
 
-                if (pendingWorldName != null && !pendingWorldName.isBlank()) {
+                if (pending) {
                     schedulePendingWorldTransferJoin(online, pendingWorldName, 20L, 45);
                     return;
                 }
 
-                ensurePersonalFlatWorldForJoin(online);
+                ensurePersonalFlatWorldForJoin(online, ownWorlds);
             });
         });
     }

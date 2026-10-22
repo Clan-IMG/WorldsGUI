@@ -237,8 +237,7 @@ public final class WorldGenerationDebug implements Listener {
     }
 
     private boolean enabled() {
-        // Temporary diagnostics requested for the next test: also enabled for existing configs.
-        return plugin.getConfig().getBoolean("debug.world-generation", true);
+        return plugin.getConfig().getBoolean("debug.world-generation", false);
     }
 
     private boolean matches(String worldName) {

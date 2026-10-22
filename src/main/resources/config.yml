@@ -5,6 +5,9 @@ api:
   # HTTP timeout settings for API calls from the Minecraft server.
   connect-timeout-seconds: 10
   request-timeout-seconds: 20
+  # Longest wait for a read on the server thread (GUIs, /nav). Longer waits freeze the whole server; after a failed
+  # request such reads are skipped for 15 seconds instead.
+  main-thread-timeout-ms: 1500
   # Optional: Base URL for profile/verify endpoints.
   # Set this to api.clan-img.net if /verify is handled by the main API service.
   profile-base-url: "https://api.clan-img.net"
@@ -92,9 +95,9 @@ hoover-dialog:
     - "%right_click%" # "&r&7<Rechtsklick> &bEinstellungen"
 
 
-# Temporary diagnostics for the next world-generation test. No generator settings are changed.
-# Also defaults to true for existing configs without this section; set false after diagnosis.
+# Diagnostics for world generation (very verbose: two lines per world on every autosave). No generator settings are
+# changed. Off unless switched on here.
 debug:
-  world-generation: true
+  world-generation: false
   # Empty = all worlds. Use actual folder/world names from the REQUEST log if filtering.
   world-generation-worlds: []

@@ -10,6 +10,7 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -18,17 +19,30 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import net.clanimg.worldsGUI.model.WorldEntry;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class WorldsRepository {
     private static final long WARNING_COOLDOWN_MS = 30_000L;
+    /**
+     * After a failed request the API counts as unreachable for this long: reads on the server thread are then skipped
+     * at once instead of freezing the server for the whole request timeout (watchdog dumps, lag for every player).
+     */
+    private static final long OUTAGE_SKIP_MS = 15_000L;
+    /** Upper bound for a read on the server thread (config {@code api.main-thread-timeout-ms}). */
+    private static final long DEFAULT_MAIN_THREAD_READ_TIMEOUT_MS = 1_500L;
+    /** Upper bound for a write on the server thread – a write is not skipped, but must not freeze the server either. */
+    private static final Duration MAIN_THREAD_WRITE_TIMEOUT = Duration.ofSeconds(5);
 
     private final JavaPlugin plugin;
     private String apiBaseUrl;
     private String apiToken;
-    private HttpClient httpClient;
+    private volatile HttpClient httpClient;
+    private Duration connectTimeout;
     private Duration requestTimeout;
+    /** until when the API counts as unreachable (see {@link #OUTAGE_SKIP_MS}) */
+    private volatile long apiDownUntil;
     private final Gson gson;
     private final Map<String, Long> warningCooldowns = new ConcurrentHashMap<>();
     private String lastInitializeError = "Unbekannter Fehler";
@@ -48,10 +62,9 @@ public final class WorldsRepository {
         this.plugin = plugin;
         this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
         this.apiToken = apiToken;
+        this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
-        this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(connectTimeout)
-            .build();
+        this.httpClient = newHttpClient(connectTimeout);
         this.gson = new Gson();
     }
 
@@ -63,8 +76,20 @@ public final class WorldsRepository {
     ) {
         this.apiBaseUrl = trimTrailingSlash(apiBaseUrl);
         this.apiToken = apiToken;
+        this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
-        this.httpClient = HttpClient.newBuilder()
+        this.httpClient = newHttpClient(connectTimeout);
+        this.apiDownUntil = 0L;
+    }
+
+    /**
+     * HTTP/1.1: with HTTP/2 every request shares one connection, and when that connection dies silently (network
+     * hiccup) all requests time out until the operating system gives it up – about 15 minutes. With HTTP/1.1 a timed
+     * out request takes only its own connection down.
+     */
+    private static HttpClient newHttpClient(Duration connectTimeout) {
+        return HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(connectTimeout)
             .build();
     }
@@ -399,6 +424,14 @@ public final class WorldsRepository {
 
     public List<WorldEntry> listOwnWorlds(String ownerUuid) {
         return listWorlds("/worlds/owner/" + encode(ownerUuid), "eigener Welten");
+    }
+
+    /**
+     * Like {@link #listOwnWorlds}, but tells "the API could not be asked" (empty Optional) apart from "the player has
+     * no worlds" (empty list) – a decision like creating a personal world must not be made on a failed request.
+     */
+    public Optional<List<WorldEntry>> tryListOwnWorlds(String ownerUuid) {
+        return fetchWorlds("/worlds/owner/" + encode(ownerUuid), "eigener Welten");
     }
 
     public List<WorldEntry> listDiscoverableWorlds(String viewerUuid, String viewerMinecraftName, boolean admin) {
@@ -844,12 +877,16 @@ public final class WorldsRepository {
     }
 
     private List<WorldEntry> listWorlds(String path, String label) {
+        return fetchWorlds(path, label).orElseGet(ArrayList::new);
+    }
+
+    private Optional<List<WorldEntry>> fetchWorlds(String path, String label) {
         List<WorldEntry> entries = new ArrayList<>();
         try {
             ApiResponse response = request("GET", path, null);
             if (response.statusCode() / 100 != 2) {
                 warnThrottled("list-worlds:" + label, "Fehler beim Laden " + label + " via API: HTTP " + response.statusCode());
-                return entries;
+                return Optional.empty();
             }
 
             JsonObject json = parseObject(response.body());
@@ -863,8 +900,9 @@ public final class WorldsRepository {
             }
         } catch (Exception ex) {
             warnThrottled("list-worlds-ex:" + label, "Fehler beim Laden " + label + " via API: " + ex.getMessage());
+            return Optional.empty();
         }
-        return entries;
+        return Optional.of(entries);
     }
 
     private void warnThrottled(String key, String message) {
@@ -907,9 +945,24 @@ public final class WorldsRepository {
     }
 
     private ApiResponse request(String baseUrl, String token, String method, String path, String jsonBody) throws IOException, InterruptedException {
+        // The server thread must never wait long for the API: every tick (all players, all worlds) stands still meanwhile.
+        boolean serverThread = Bukkit.isPrimaryThread();
+        boolean read = "GET".equals(method);
+        Duration timeout = requestTimeout;
+        if (serverThread) {
+            if (read && System.currentTimeMillis() < apiDownUntil) {
+                throw new IOException("API zurzeit nicht erreichbar (Anfrage übersprungen, damit der Server nicht hängt)");
+            }
+            Duration cap = read
+                ? Duration.ofMillis(Math.max(200L, plugin.getConfig().getLong("api.main-thread-timeout-ms", DEFAULT_MAIN_THREAD_READ_TIMEOUT_MS)))
+                : MAIN_THREAD_WRITE_TIMEOUT;
+            if (cap.compareTo(timeout) < 0) {
+                timeout = cap;
+            }
+        }
         HttpRequest.Builder builder = HttpRequest.newBuilder()
             .uri(URI.create(trimTrailingSlash(baseUrl) + path))
-            .timeout(requestTimeout)
+            .timeout(timeout)
             .header("Authorization", "Bearer " + token)
             .header("X-API-Token", token)
             .header("Accept", "application/json");
@@ -924,8 +977,35 @@ public final class WorldsRepository {
             }
         }
 
-        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        HttpClient client = httpClient;
+        HttpResponse<String> response;
+        try {
+            response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (HttpTimeoutException ex) {
+            apiFailed(client, true);
+            throw ex;
+        } catch (IOException ex) {
+            apiFailed(client, false);
+            throw ex;
+        }
+        apiDownUntil = 0L;
         return new ApiResponse(response.statusCode(), response.body() == null ? "" : response.body());
+    }
+
+    /**
+     * Marks the API as unreachable for {@link #OUTAGE_SKIP_MS}. After a timeout the client is replaced as well, so the
+     * next request opens a fresh connection instead of waiting on one that may be dead.
+     */
+    private void apiFailed(HttpClient failed, boolean timedOut) {
+        apiDownUntil = System.currentTimeMillis() + OUTAGE_SKIP_MS;
+        if (!timedOut) {
+            return;
+        }
+        synchronized (this) {
+            if (httpClient == failed) {
+                httpClient = newHttpClient(connectTimeout);
+            }
+        }
     }
 
     private String resolveOrdersApiBaseUrl() {
