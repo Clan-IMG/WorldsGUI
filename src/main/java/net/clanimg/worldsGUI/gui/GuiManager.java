@@ -1072,6 +1072,7 @@ public final class GuiManager {
                 runPostCreateCommands(world);
 
                 runEntityCleanup(world);
+                configureChunkyWorld(world, null);
 
                 persistWorldMetadataWithRetry(
                     UUID.fromString(ownerUuid),
@@ -3270,7 +3271,8 @@ public final class GuiManager {
 
     private void openCreateOptionsMenu(Player player, int returnPage) {
         String worldName = generateLocalWorldName(player);
-        openCreateOptionsMenu(player, worldName, returnPage, false, false);
+        // Chunky ist standardmäßig an: jede neue Welt wird vorgeneriert, abschaltbar nur bewusst im Menü.
+        openCreateOptionsMenu(player, worldName, returnPage, false, true);
     }
 
     private void openCreateOptionsMenu(Player player, String worldName, int returnPage, boolean voidWorld, boolean chunkyEnabled) {
@@ -3647,7 +3649,9 @@ public final class GuiManager {
     private void configureChunkyWorld(World world, Player player) {
         if (Bukkit.getPluginManager().getPlugin("Chunky") == null) {
             plugin.getLogger().warning("Chunky wurde nicht gefunden. Vorgenerierung übersprungen für " + world.getName());
-            send(player, "chunky.missing");
+            if (player != null) {
+                send(player, "chunky.missing");
+            }
             return;
         }
 
