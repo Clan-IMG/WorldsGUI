@@ -83,6 +83,11 @@ backup:
   # Zeitzone für die im GUI angezeigten Backup-Zeiten.
   display-timezone: "Europe/Berlin"
 
+chunky:
+  # Radius in Blöcken um den Spawn, den Chunky bei neuen Welten vorgeneriert (Kreis).
+  # Aufwand und Speicher wachsen quadratisch: doppelter Radius = ca. 4x so viele Chunks.
+  radius: 10000
+
 idle-unload:
   # Entlädt eine private Einzelspieler-Welt automatisch, sobald niemand mehr darin ist - aber
   # nicht sofort, erst nach delay-seconds ohne Spieler (schützt vor sofortigem Neuladen bei
