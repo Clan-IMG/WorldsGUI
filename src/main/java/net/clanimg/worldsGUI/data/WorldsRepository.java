@@ -9,8 +9,8 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -25,15 +25,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class WorldsRepository {
     private static final long WARNING_COOLDOWN_MS = 30_000L;
-    /**
-     * After a failed request the API counts as unreachable for this long: reads on the server thread are then skipped
-     * at once instead of freezing the server for the whole request timeout (watchdog dumps, lag for every player).
-     */
-    private static final long OUTAGE_SKIP_MS = 15_000L;
     /** Upper bound for a read on the server thread (config {@code api.main-thread-timeout-ms}). */
     private static final long DEFAULT_MAIN_THREAD_READ_TIMEOUT_MS = 1_500L;
-    /** Upper bound for a write on the server thread – a write is not skipped, but must not freeze the server either. */
-    private static final Duration MAIN_THREAD_WRITE_TIMEOUT = Duration.ofSeconds(5);
+    private static final int CIRCUIT_FAILURE_THRESHOLD = 2;
+    private static final long CIRCUIT_OPEN_MS = 15_000L;
 
     private final JavaPlugin plugin;
     private String apiBaseUrl;
@@ -41,10 +36,9 @@ public final class WorldsRepository {
     private volatile HttpClient httpClient;
     private Duration connectTimeout;
     private Duration requestTimeout;
-    /** until when the API counts as unreachable (see {@link #OUTAGE_SKIP_MS}) */
-    private volatile long apiDownUntil;
     private final Gson gson;
     private final Map<String, Long> warningCooldowns = new ConcurrentHashMap<>();
+    private final Map<String, ApiCircuit> circuits = new ConcurrentHashMap<>();
     private String lastInitializeError = "Unbekannter Fehler";
 
     public record OrderAssignmentCheck(boolean exists, boolean assigned) {}
@@ -64,7 +58,7 @@ public final class WorldsRepository {
         this.apiToken = apiToken;
         this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
-        this.httpClient = newHttpClient(connectTimeout);
+        this.httpClient = buildHttpClient(connectTimeout);
         this.gson = new Gson();
     }
 
@@ -78,20 +72,28 @@ public final class WorldsRepository {
         this.apiToken = apiToken;
         this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
-        this.httpClient = newHttpClient(connectTimeout);
-        this.apiDownUntil = 0L;
+        this.httpClient = buildHttpClient(connectTimeout);
     }
 
     /**
-     * HTTP/1.1: with HTTP/2 every request shares one connection, and when that connection dies silently (network
-     * hiccup) all requests time out until the operating system gives it up – about 15 minutes. With HTTP/1.1 a timed
-     * out request takes only its own connection down.
+     * HTTP/1.1 statt des HTTP/2-Defaults: Bei HTTP/2 laufen alle Requests über eine einzige Verbindung.
+     * Wird die stillschweigend getrennt (NAT/Proxy), hängt jeder Request bis zum Timeout, bis der Kernel
+     * die Verbindung nach Minuten verwirft. Bei HTTP/1.1 wird die Verbindung beim Timeout geschlossen.
      */
-    private static HttpClient newHttpClient(Duration connectTimeout) {
+    private static HttpClient buildHttpClient(Duration connectTimeout) {
         return HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(connectTimeout)
             .build();
+    }
+
+    /** Verwirft alle gepoolten Verbindungen, damit nach einem Timeout keine toten Verbindungen wiederverwendet werden. */
+    private synchronized void resetHttpClient(HttpClient failedClient) {
+        if (httpClient == failedClient) {
+            httpClient = buildHttpClient(connectTimeout);
+            failedClient.shutdown();
+            plugin.getLogger().warning("API-Request timed out - HTTP-Verbindungen werden neu aufgebaut.");
+        }
     }
 
     public boolean initialize() {
@@ -945,17 +947,11 @@ public final class WorldsRepository {
     }
 
     private ApiResponse request(String baseUrl, String token, String method, String path, String jsonBody) throws IOException, InterruptedException {
-        // The server thread must never wait long for the API: every tick (all players, all worlds) stands still meanwhile.
-        boolean serverThread = Bukkit.isPrimaryThread();
-        boolean read = "GET".equals(method);
+        // A read on the server thread stalls every tick (all players, all worlds) while it waits, so it gets less time.
         Duration timeout = requestTimeout;
-        if (serverThread) {
-            if (read && System.currentTimeMillis() < apiDownUntil) {
-                throw new IOException("API zurzeit nicht erreichbar (Anfrage übersprungen, damit der Server nicht hängt)");
-            }
-            Duration cap = read
-                ? Duration.ofMillis(Math.max(200L, plugin.getConfig().getLong("api.main-thread-timeout-ms", DEFAULT_MAIN_THREAD_READ_TIMEOUT_MS)))
-                : MAIN_THREAD_WRITE_TIMEOUT;
+        if ("GET".equals(method) && Bukkit.isPrimaryThread()) {
+            Duration cap = Duration.ofMillis(Math.max(200L,
+                plugin.getConfig().getLong("api.main-thread-timeout-ms", DEFAULT_MAIN_THREAD_READ_TIMEOUT_MS)));
             if (cap.compareTo(timeout) < 0) {
                 timeout = cap;
             }
@@ -977,35 +973,29 @@ public final class WorldsRepository {
             }
         }
 
+        ApiCircuit circuit = circuits.computeIfAbsent(trimTrailingSlash(baseUrl), key -> new ApiCircuit());
+        if (circuit.isOpen()) {
+            throw new IOException("API nicht erreichbar, nächster Versuch in " + circuit.remainingSeconds() + "s");
+        }
+
         HttpClient client = httpClient;
         HttpResponse<String> response;
         try {
             response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        } catch (HttpTimeoutException ex) {
-            apiFailed(client, true);
-            throw ex;
         } catch (IOException ex) {
-            apiFailed(client, false);
+            if (ex instanceof HttpTimeoutException) {
+                resetHttpClient(client);
+            }
+            if (circuit.recordFailure()) {
+                plugin.getLogger().warning("API " + baseUrl + " antwortet nicht (" + ex.getMessage()
+                    + ") - Requests werden für " + (CIRCUIT_OPEN_MS / 1000) + "s sofort abgebrochen, damit der Server nicht blockiert.");
+            }
             throw ex;
         }
-        apiDownUntil = 0L;
+        if (circuit.recordSuccess()) {
+            plugin.getLogger().info("API " + baseUrl + " ist wieder erreichbar.");
+        }
         return new ApiResponse(response.statusCode(), response.body() == null ? "" : response.body());
-    }
-
-    /**
-     * Marks the API as unreachable for {@link #OUTAGE_SKIP_MS}. After a timeout the client is replaced as well, so the
-     * next request opens a fresh connection instead of waiting on one that may be dead.
-     */
-    private void apiFailed(HttpClient failed, boolean timedOut) {
-        apiDownUntil = System.currentTimeMillis() + OUTAGE_SKIP_MS;
-        if (!timedOut) {
-            return;
-        }
-        synchronized (this) {
-            if (httpClient == failed) {
-                httpClient = newHttpClient(connectTimeout);
-            }
-        }
     }
 
     private String resolveOrdersApiBaseUrl() {
@@ -1215,6 +1205,42 @@ public final class WorldsRepository {
                 return statusCode == 0 ? "api-unreachable" : "";
             }
             return json.get("detail").getAsString();
+        }
+    }
+
+    /**
+     * Circuit-Breaker: Nach mehreren Netzwerkfehlern in Folge werden Requests eine Zeit lang sofort abgelehnt,
+     * statt jeden Aufrufer (oft den Main-Thread) bis zum Timeout blockieren zu lassen.
+     */
+    private static final class ApiCircuit {
+        private int consecutiveFailures;
+        private long openUntilMillis;
+
+        synchronized boolean isOpen() {
+            return System.currentTimeMillis() < openUntilMillis;
+        }
+
+        synchronized long remainingSeconds() {
+            return Math.max(1, (openUntilMillis - System.currentTimeMillis() + 999) / 1000);
+        }
+
+        /** @return true, wenn der Circuit durch diesen Fehler (erneut) geöffnet wurde und zuvor geschlossen war. */
+        synchronized boolean recordFailure() {
+            consecutiveFailures++;
+            if (consecutiveFailures < CIRCUIT_FAILURE_THRESHOLD) {
+                return false;
+            }
+            boolean wasClosed = consecutiveFailures == CIRCUIT_FAILURE_THRESHOLD;
+            openUntilMillis = System.currentTimeMillis() + CIRCUIT_OPEN_MS;
+            return wasClosed;
+        }
+
+        /** @return true, wenn der Circuit vorher offen war (API wieder erreichbar). */
+        synchronized boolean recordSuccess() {
+            boolean wasOpen = consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD;
+            consecutiveFailures = 0;
+            openUntilMillis = 0L;
+            return wasOpen;
         }
     }
 }

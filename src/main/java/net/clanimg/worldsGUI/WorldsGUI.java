@@ -11,6 +11,8 @@ import net.clanimg.worldsGUI.gui.GuiManager;
 import net.clanimg.worldsGUI.guiconfig.GuiConfig;
 import net.clanimg.worldsGUI.guiconfig.GuiConfigException;
 import net.clanimg.worldsGUI.guiconfig.GuiConfigLoader;
+import net.clanimg.worldsGUI.idle.IdleUnloadSettings;
+import net.clanimg.worldsGUI.idle.IdleWorldUnloader;
 import net.clanimg.worldsGUI.listener.ChatInputListener;
 import net.clanimg.worldsGUI.listener.ConsoleLoginListener;
 import net.clanimg.worldsGUI.listener.InventoryListener;
@@ -40,6 +42,7 @@ public final class WorldsGUI extends JavaPlugin {
     private BukkitTask ticketSyncTask;
     private BukkitTask roleSyncTask;
     private BukkitTask serverHeartbeatTask;
+    private BukkitTask idleUnloadTask;
     private ConsoleLoginListener consoleLoginListener;
     private WorldsGuiAddonApiImpl addonApi;
     private final AtomicBoolean joinRequestPollRunning = new AtomicBoolean(false);
@@ -52,8 +55,8 @@ public final class WorldsGUI extends JavaPlugin {
 
         String apiBaseUrl = getConfig().getString("api.base-url", "");
         String apiToken = getConfig().getString("api.token", "");
-        int connectTimeoutSeconds = Math.max(3, getConfig().getInt("api.connect-timeout-seconds", 10));
-        int requestTimeoutSeconds = Math.max(5, getConfig().getInt("api.request-timeout-seconds", 20));
+        int connectTimeoutSeconds = Math.max(3, getConfig().getInt("api.connect-timeout-seconds", 3));
+        int requestTimeoutSeconds = Math.max(5, getConfig().getInt("api.request-timeout-seconds", 5));
 
         if (apiBaseUrl == null || apiBaseUrl.isBlank()) {
             disablePluginWithReason("API base-url ist leer oder fehlt in config.yml (api.base-url).");
@@ -76,7 +79,8 @@ public final class WorldsGUI extends JavaPlugin {
             getLogger().warning("WorldsGUI bleibt aktiv und versucht die API später erneut zu erreichen.");
         }
 
-        guiManager = new GuiManager(this, repository);
+        IdleWorldUnloader idleWorldUnloader = new IdleWorldUnloader(this, IdleUnloadSettings.from(getConfig()));
+        guiManager = new GuiManager(this, repository, idleWorldUnloader);
 
         try {
             GuiConfig guiConfig = GuiConfigLoader.load(this);
@@ -117,6 +121,16 @@ public final class WorldsGUI extends JavaPlugin {
             20L,
             20L * SERVER_HEARTBEAT_INTERVAL_SECONDS
         );
+        if (idleWorldUnloader.isEnabled()) {
+            long idleUnloadIntervalTicks = 20L * idleWorldUnloader.checkIntervalSeconds();
+            // Welten gehören dem Server-Thread - kein Async hier, anders als die reinen API-Polls oben.
+            idleUnloadTask = Bukkit.getScheduler().runTaskTimer(
+                this,
+                idleWorldUnloader::sweep,
+                idleUnloadIntervalTicks,
+                idleUnloadIntervalTicks
+            );
+        }
 
         if (getCommand("nav") != null) {
             NavCommand navCommand = new NavCommand(guiManager);
@@ -181,8 +195,8 @@ public final class WorldsGUI extends JavaPlugin {
         saveResource("messages.yml", false);
         saveResource("world-defaults.yml", false);
 
-        int connectTimeoutSeconds = Math.max(3, getConfig().getInt("api.connect-timeout-seconds", 10));
-        int requestTimeoutSeconds = Math.max(5, getConfig().getInt("api.request-timeout-seconds", 20));
+        int connectTimeoutSeconds = Math.max(3, getConfig().getInt("api.connect-timeout-seconds", 3));
+        int requestTimeoutSeconds = Math.max(5, getConfig().getInt("api.request-timeout-seconds", 5));
         String apiBaseUrl = getConfig().getString("api.base-url", "");
         String apiToken = getConfig().getString("api.token", "");
         repository.reloadApiSettings(
@@ -246,6 +260,10 @@ public final class WorldsGUI extends JavaPlugin {
         if (serverHeartbeatTask != null) {
             serverHeartbeatTask.cancel();
             serverHeartbeatTask = null;
+        }
+        if (idleUnloadTask != null) {
+            idleUnloadTask.cancel();
+            idleUnloadTask = null;
         }
         syncServerHeartbeat(false);
         if (guiManager != null) {
