@@ -3660,7 +3660,7 @@ public final class GuiManager {
         generationDebug.dispatchCommand("configureChunkyWorld.world@GuiManager:3548", console, "chunky world " + worldName);
         generationDebug.dispatchCommand("configureChunkyWorld.center@GuiManager:3549", console, "chunky center");
         generationDebug.dispatchCommand("configureChunkyWorld.shape@GuiManager:3550", console, "chunky shape circle");
-        int radius = Math.max(16, plugin.getConfig().getInt("chunky.radius", 10000));
+        int radius = Math.max(16, plugin.getConfig().getInt("chunky.radius", 2500));
         generationDebug.dispatchCommand("configureChunkyWorld.radius@GuiManager:3551", console, "chunky radius " + radius);
         generationDebug.dispatchCommand("configureChunkyWorld.start@GuiManager:3552", console, "chunky start");
     }

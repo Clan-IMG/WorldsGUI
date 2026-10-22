@@ -86,7 +86,7 @@ backup:
 chunky:
   # Radius in Blöcken um den Spawn, den Chunky bei neuen Welten vorgeneriert (Kreis).
   # Aufwand und Speicher wachsen quadratisch: doppelter Radius = ca. 4x so viele Chunks.
-  radius: 10000
+  radius: 2500
 
 idle-unload:
   # Entlädt eine private Einzelspieler-Welt automatisch, sobald niemand mehr darin ist - aber
