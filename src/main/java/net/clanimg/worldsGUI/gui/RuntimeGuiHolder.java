@@ -17,6 +17,7 @@ public final class RuntimeGuiHolder implements InventoryHolder {
 
     private final String guiId;
     private final Map<Integer, ClickHandler> clickHandlers = new HashMap<>();
+    private final Map<Integer, Integer> pageButtons = new HashMap<>();
 
     public RuntimeGuiHolder(String guiId) {
         this.guiId = guiId;
@@ -32,6 +33,16 @@ public final class RuntimeGuiHolder implements InventoryHolder {
 
     public ClickHandler clickHandler(int slot) {
         return clickHandlers.get(slot);
+    }
+
+    /** Blätter-Knopf: Klick auf diesen Slot wechselt auf die Seite {@code targetPage}. */
+    public void putPageButton(int slot, int targetPage) {
+        pageButtons.put(slot, targetPage);
+    }
+
+    /** Ziel-Seite des Blätter-Knopfs in diesem Slot, oder null. */
+    public Integer pageButton(int slot) {
+        return pageButtons.get(slot);
     }
 
     @Override

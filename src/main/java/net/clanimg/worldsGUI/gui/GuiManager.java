@@ -3,6 +3,8 @@ package net.clanimg.worldsGUI.gui;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -53,6 +55,7 @@ import net.clanimg.worldsGUI.data.WorldsRepository.WorldBackupOverview;
 import net.clanimg.worldsGUI.guiconfig.GuiAction;
 import net.clanimg.worldsGUI.guiconfig.GuiConfig;
 import net.clanimg.worldsGUI.guiconfig.GuiDefinition;
+import net.clanimg.worldsGUI.guiconfig.GuiPagination;
 import net.clanimg.worldsGUI.guiconfig.GuiSlotDefinition;
 import net.clanimg.worldsGUI.guiconfig.GuiSlotRangeDefinition;
 import net.clanimg.worldsGUI.guiconfig.GuiToggleState;
@@ -168,6 +171,8 @@ public final class GuiManager {
     private volatile boolean warnedBlockedLocalServerForAutoCreate;
     private volatile GuiConfig guiConfig;
     private final PlayerSessionManager playerSessions = new PlayerSessionManager();
+    private final ChunkyBridge chunky;
+    private final RecentWorldsStore recentWorlds;
     private final TriggerDispatcher triggerDispatcher;
     private final BackupService backupService;
     private final WorldGenerationDebug generationDebug;
@@ -181,6 +186,11 @@ public final class GuiManager {
         this.messagesConfig = loadMessagesConfig();
         this.worldDefaultsConfig = loadWorldDefaultsConfig();
         this.backupService = new BackupService(plugin, repository, new BackupHooks());
+        this.chunky = new ChunkyBridge(plugin);
+        this.recentWorlds = new RecentWorldsStore(plugin);
+        ToggleRuntime.registerStateSource("chunky", (viewer, world) -> chunky.isRunning(world) ? "on" : "off");
+        PlaceholderExpander.registerWorldPlaceholder("chunky_status", (viewer, world) -> chunkyStatusText(world));
+        PlaceholderExpander.registerWorldPlaceholder("chunky_radius", (viewer, world) -> Integer.toString(chunky.radius()));
         this.triggerDispatcher = new TriggerDispatcher(
             this::openGui,
             (player, command, chatFeedback) -> {
@@ -214,10 +224,17 @@ public final class GuiManager {
 
     private FileConfiguration loadMessagesConfig() {
         File messagesFile = new File(plugin.getDataFolder(), "messages.yml");
-        if (!messagesFile.exists()) {
-            return new YamlConfiguration();
+        YamlConfiguration messages = messagesFile.exists() ? YamlConfiguration.loadConfiguration(messagesFile) : new YamlConfiguration();
+        // Texte aus dem Plugin-Jar als Standard: neue Meldungen funktionieren auch mit einer älteren messages.yml.
+        InputStream bundled = plugin.getResource("messages.yml");
+        if (bundled != null) {
+            try (InputStreamReader reader = new InputStreamReader(bundled, StandardCharsets.UTF_8)) {
+                messages.setDefaults(YamlConfiguration.loadConfiguration(reader));
+            } catch (IOException ex) {
+                plugin.getLogger().warning("Standard-Texte aus messages.yml konnten nicht geladen werden: " + ex.getMessage());
+            }
         }
-        return YamlConfiguration.loadConfiguration(messagesFile);
+        return messages;
     }
 
     private boolean dispatchRuntimeGuiCommand(Player player, String rawCommand) {
@@ -430,31 +447,76 @@ public final class GuiManager {
     }
 
     private void renderAutoContent(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player) {
-        ViewMode mode = switch (holder.guiId()) {
+        ViewMode mode = viewModeFor(holder.guiId());
+        if (mode == null && !"own-worlds".equalsIgnoreCase(definition.autoContentSource())) {
+            return;
+        }
+        ViewMode effectiveMode = mode == null ? ViewMode.OWN : mode;
+
+        List<WorldEntry> worlds = listWorldsFor(player, effectiveMode);
+
+        // Freie Slots für Welten (alles, was slot-1..9 und slot-range nicht belegt haben).
+        List<Integer> freeSlots = new ArrayList<>();
+        for (int absoluteSlot = 0; absoluteSlot < definition.size(); absoluteSlot++) {
+            if (inventory.getItem(absoluteSlot) == null) {
+                freeSlots.add(absoluteSlot);
+            }
+        }
+        if (freeSlots.isEmpty()) {
+            return;
+        }
+
+        int pageSize = freeSlots.size();
+        int pageCount = Math.max(1, (worlds.size() + pageSize - 1) / pageSize);
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        int page = Math.min(session.page(holder.guiId()), pageCount - 1);
+        session.setPage(holder.guiId(), page);
+
+        int worldIndex = page * pageSize;
+        for (int absoluteSlot : freeSlots) {
+            if (worldIndex >= worlds.size()) {
+                break;
+            }
+            WorldEntry entry = worlds.get(worldIndex++);
+            inventory.setItem(absoluteSlot, worldIcon(entry, effectiveMode, player.getWorld().getName(), canManageWorld(player, entry)));
+        }
+
+        renderPaginationButtons(inventory, holder, definition, player, session, page, pageCount);
+    }
+
+    /** Zeigt "Vorherige/Nächste Seite" nur an, wenn es die Seite gibt (pagination-Block in guis.yml). */
+    private void renderPaginationButtons(Inventory inventory, RuntimeGuiHolder holder, GuiDefinition definition, Player player,
+                                         PlayerGuiSession session, int page, int pageCount) {
+        GuiPagination pagination = definition.pagination();
+        if (pagination == null || pageCount <= 1) {
+            return;
+        }
+        Map<String, String> pageValues = Map.of("page", Integer.toString(page + 1), "pages", Integer.toString(pageCount));
+        if (page > 0) {
+            int slot = SlotMapper.mapRowSlotToAbsolute(pagination.previousSlot(), definition.position(), definition.size());
+            String title = PlaceholderExpander.expand(pagination.previousTitle(), player, session, pageValues);
+            ItemStack item = buildRuntimeItem(pagination.previousMaterial(), title, player, session, pageValues);
+            inventory.setItem(slot, withRuntimeLore(item, pagination.previousLore(), player, session, pageValues));
+            holder.putPageButton(slot, page - 1);
+        }
+        if (page < pageCount - 1) {
+            int slot = SlotMapper.mapRowSlotToAbsolute(pagination.nextSlot(), definition.position(), definition.size());
+            String title = PlaceholderExpander.expand(pagination.nextTitle(), player, session, pageValues);
+            ItemStack item = buildRuntimeItem(pagination.nextMaterial(), title, player, session, pageValues);
+            inventory.setItem(slot, withRuntimeLore(item, pagination.nextLore(), player, session, pageValues));
+            holder.putPageButton(slot, page + 1);
+        }
+    }
+
+    private static ViewMode viewModeFor(String guiId) {
+        return switch (guiId) {
             case "my-worlds" -> ViewMode.OWN;
             case "invited-worlds" -> ViewMode.INVITED;
             case "archived-tickets" -> ViewMode.ARCHIVED;
             case "tickets" -> ViewMode.PUBLIC;
+            case "recent-worlds" -> ViewMode.RECENT;
             default -> null;
         };
-        if (mode == null && !"own-worlds".equalsIgnoreCase(definition.autoContentSource())) {
-            return;
-        }
-
-        List<WorldEntry> worlds = listWorldsFor(player, mode == null ? ViewMode.OWN : mode);
-        int worldIndex = 0;
-
-        for (int absoluteSlot = 0; absoluteSlot < definition.size(); absoluteSlot++) {
-            if (inventory.getItem(absoluteSlot) != null) {
-                continue;
-            }
-            if (worldIndex >= worlds.size()) {
-                break;
-            }
-
-            WorldEntry entry = worlds.get(worldIndex++);
-            inventory.setItem(absoluteSlot, worldIcon(entry, mode == null ? ViewMode.OWN : mode, player.getWorld().getName()));
-        }
     }
 
     /**
@@ -699,6 +761,13 @@ public final class GuiManager {
             return;
         }
 
+        Integer targetPage = holder.pageButton(slot);
+        if (targetPage != null) {
+            playerSessions.getOrCreate(player.getUniqueId()).setPage(holder.guiId(), targetPage);
+            openGui(player, holder.guiId());
+            return;
+        }
+
         RuntimeGuiHolder.ClickHandler clickHandler = holder.clickHandler(slot);
         if (clickHandler == null || clickHandler.action() == null) {
             handleRuntimeWorldItemClick(player, event, holder);
@@ -715,13 +784,7 @@ public final class GuiManager {
     }
 
     private void handleRuntimeWorldItemClick(Player player, InventoryClickEvent event, RuntimeGuiHolder holder) {
-        ViewMode mode = switch (holder.guiId()) {
-            case "my-worlds" -> ViewMode.OWN;
-            case "invited-worlds" -> ViewMode.INVITED;
-            case "tickets" -> ViewMode.PUBLIC;
-            case "archived-tickets" -> ViewMode.ARCHIVED;
-            default -> null;
-        };
+        ViewMode mode = viewModeFor(holder.guiId());
         if (mode == null) {
             return;
         }
@@ -742,9 +805,10 @@ public final class GuiManager {
             return;
         }
 
-        if (event.isRightClick() && mode == ViewMode.OWN) {
+        if (event.isRightClick()) {
+            // Einstellungen: Besitzer und Admins, bei Ticket-Welten auch eingeladene Teamer (keine Kunden).
             Optional<WorldEntry> entry = repository.findByWorldName(worldName);
-            if (entry.isPresent() && entry.get().ownerUuid().equals(player.getUniqueId().toString())) {
+            if (entry.isPresent() && !entry.get().isArchived() && canManageWorld(player, entry.get())) {
                 selectedWorldByPlayer.put(player.getUniqueId(), worldName);
                 PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
                 session.setCurrentWorld(worldName);
@@ -758,6 +822,7 @@ public final class GuiManager {
         if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV, true)) {
             return;
         }
+        playerSessions.getOrCreate(player.getUniqueId()).resetPages();
         openGui(player, "my-worlds");
         syncAssignedTicketWorlds(player);
     }
@@ -1072,7 +1137,6 @@ public final class GuiManager {
                 runPostCreateCommands(world);
 
                 runEntityCleanup(world);
-                configureChunkyWorld(world, null);
 
                 persistWorldMetadataWithRetry(
                     UUID.fromString(ownerUuid),
@@ -1819,7 +1883,7 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -1870,7 +1934,7 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -2461,7 +2525,7 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -2526,7 +2590,7 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -2577,7 +2641,7 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -2626,7 +2690,7 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -3152,7 +3216,7 @@ public final class GuiManager {
             return;
         }
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString())) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -3181,7 +3245,7 @@ public final class GuiManager {
             return;
         }
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString())) {
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
             return;
         }
@@ -3271,8 +3335,8 @@ public final class GuiManager {
 
     private void openCreateOptionsMenu(Player player, int returnPage) {
         String worldName = generateLocalWorldName(player);
-        // Chunky ist standardmäßig an: jede neue Welt wird vorgeneriert, abschaltbar nur bewusst im Menü.
-        openCreateOptionsMenu(player, worldName, returnPage, false, true);
+        // Chunky ist standardmäßig aus; vorgeneriert wird nur, wenn man es bewusst einschaltet.
+        openCreateOptionsMenu(player, worldName, returnPage, false, false);
     }
 
     private void openCreateOptionsMenu(Player player, String worldName, int returnPage, boolean voidWorld, boolean chunkyEnabled) {
@@ -3367,6 +3431,16 @@ public final class GuiManager {
 
         if (mode == ViewMode.ARCHIVED) {
             return admin ? repository.listArchivedWorlds() : List.of();
+        }
+
+        if (mode == ViewMode.RECENT) {
+            List<WorldEntry> recent = new ArrayList<>();
+            for (String worldName : recentWorlds.recent(UUID.fromString(ownerUuid))) {
+                repository.findByWorldName(worldName)
+                    .filter(entry -> !entry.isArchived())
+                    .ifPresent(recent::add);
+            }
+            return recent;
         }
 
         if (mode == ViewMode.PUBLIC) {
@@ -3491,6 +3565,7 @@ public final class GuiManager {
         generationDebug.request("GUI_OR_COMMAND_CREATE", worldName, voidWorld ? "VOID" : "FLAT",
             targetServer, localServer, shouldCreateLocally);
         if (!shouldCreateLocally) {
+            player.closeInventory();
             send(player, "create.remote-info-1");
             send(player, "create.remote-info-2", "%server%", targetServer);
             String creatingTitle = configuredMessageLine("create-creating-title", "Welt wird erstellt...");
@@ -3534,7 +3609,8 @@ public final class GuiManager {
         String importCommand = "mv import " + worldName + " normal" + (voidWorld ? " --generator VoidGen" : "");
         generationDebug.dispatchCommand("createWorld.import@GuiManager:3425", console, importCommand);
 
-        // Title sofort zeigen
+        // GUI schließen und Title sofort zeigen (das GUI wird danach bewusst nicht wieder geöffnet).
+        player.closeInventory();
         String creatingTitle = configuredMessageLine("create-creating-title", "Welt wird erstellt...");
         player.sendTitle(ChatColor.translateAlternateColorCodes('&', creatingTitle), "", 10, 70, 10);
 
@@ -3589,7 +3665,6 @@ public final class GuiManager {
                 }
                 if (notifyWhenVisible) {
                     send(player, "create.dashboard-visible-teleport");
-                    openGui(player, "my-worlds");
                     return;
                 }
 
@@ -3647,22 +3722,84 @@ public final class GuiManager {
     }
 
     private void configureChunkyWorld(World world, Player player) {
-        if (Bukkit.getPluginManager().getPlugin("Chunky") == null) {
-            plugin.getLogger().warning("Chunky wurde nicht gefunden. Vorgenerierung übersprungen für " + world.getName());
+        if (!chunky.isAvailable() || !chunky.start(world)) {
+            plugin.getLogger().warning("Chunky nicht verfügbar. Vorgenerierung übersprungen für " + world.getName());
             if (player != null) {
                 send(player, "chunky.missing");
             }
+        }
+    }
+
+    /**
+     * /nav my-world chunky &lt;world&gt; &lt;on|off|toggle&gt; - Vorgenerierung einer Welt an-/ausschalten.
+     * Erlaubt für alle, die die Welt verwalten dürfen; mit Cooldown pro Welt und Limit gleichzeitiger Vorgenerierungen
+     * (Admins sind davon ausgenommen).
+     */
+    public void executeNavMyWorldChunky(Player player, String worldName, String modeArg) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CHUNKY, true)) {
+            return;
+        }
+        Optional<WorldEntry> entryOpt = repository.findByWorldName(worldName);
+        if (entryOpt.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+        WorldEntry entry = entryOpt.get();
+        if (!canManageWorld(player, entry)) {
+            send(player, "not-world-owner");
+            return;
+        }
+        if (!isWorldOnThisServer(entry)) {
+            send(player, "chunky.other-server", "%server%", entry.serverName() == null ? "?" : entry.serverName());
             return;
         }
 
-        ConsoleCommandSender console = Bukkit.getConsoleSender();
-        String worldName = world.getName();
-        generationDebug.dispatchCommand("configureChunkyWorld.world@GuiManager:3548", console, "chunky world " + worldName);
-        generationDebug.dispatchCommand("configureChunkyWorld.center@GuiManager:3549", console, "chunky center");
-        generationDebug.dispatchCommand("configureChunkyWorld.shape@GuiManager:3550", console, "chunky shape circle");
-        int radius = Math.max(16, plugin.getConfig().getInt("chunky.radius", 2500));
-        generationDebug.dispatchCommand("configureChunkyWorld.radius@GuiManager:3551", console, "chunky radius " + radius);
-        generationDebug.dispatchCommand("configureChunkyWorld.start@GuiManager:3552", console, "chunky start");
+        String mode = modeArg == null ? "toggle" : modeArg.trim().toLowerCase(Locale.ROOT);
+        boolean enable = switch (mode) {
+            case "on", "an", "start" -> true;
+            case "off", "aus", "stop" -> false;
+            default -> !chunky.isRunning(entry.worldName());
+        };
+
+        ChunkyBridge.ToggleResult result = chunky.toggle(entry.worldName(), enable, player.hasPermission(Permissions.ADMIN));
+        switch (result) {
+            case STARTED -> send(player, "chunky.started", "%world%", entry.displayName(), "%radius%", Integer.toString(chunky.radius()));
+            case STOPPED -> send(player, "chunky.stopped", "%world%", entry.displayName());
+            case ALREADY_RUNNING -> send(player, "chunky.already-running");
+            case NOT_RUNNING -> send(player, "chunky.not-running");
+            case COOLDOWN -> send(player, "chunky.cooldown", "%seconds%", Long.toString(chunky.cooldownRemainingSeconds(entry.worldName())));
+            case TOO_MANY_TASKS -> send(player, "chunky.too-many-tasks", "%max%", Integer.toString(chunky.maxParallelTasks()));
+            case WORLD_NOT_LOADED -> send(player, "world-not-loaded");
+            case UNAVAILABLE -> send(player, "chunky.missing");
+            case FAILED -> send(player, "chunky.failed");
+        }
+    }
+
+    /** Text für %chunky_status% im GUI. */
+    private String chunkyStatusText(String worldName) {
+        if (!chunky.isAvailable()) {
+            return configuredMessageLine("chunky.status-unavailable", "nicht installiert");
+        }
+        if (!chunky.isRunning(worldName)) {
+            return configuredMessageLine("chunky.status-off", "aus");
+        }
+        float progress = chunky.progress(worldName);
+        return progress < 0
+            ? configuredMessageLine("chunky.status-running", "läuft")
+            : configuredMessageLine("chunky.status-running-progress", "läuft (%progress%%)", "%progress%", String.format(Locale.ROOT, "%.1f", progress));
+    }
+
+    /**
+     * Darf der Spieler die Welt verwalten (Freunde, Rechte, Name, Icon, Chunky)? Besitzer und WorldsGUI-Admins immer;
+     * bei Ticket-Welten zusätzlich eingeladene Teamer - Kunden des Auftrags aber nie.
+     */
+    private boolean canManageWorld(Player player, WorldEntry entry) {
+        if (entry.ownerUuid().equals(player.getUniqueId().toString()) || player.hasPermission(Permissions.ADMIN)) {
+            return true;
+        }
+        return isTicketWorld(entry)
+            && containsIgnoreCase(entry.invitedPlayers(), player.getName())
+            && !containsIgnoreCase(entry.customers(), player.getName());
     }
 
     private void prepareVoidSpawn(World world) {
@@ -4482,6 +4619,8 @@ public final class GuiManager {
             }
             return false;
         }
+
+        recentWorlds.record(player.getUniqueId(), entry.worldName());
 
         if (!isWorldOnThisServer(entry)) {
             if (notify) {
@@ -5328,20 +5467,23 @@ public final class GuiManager {
 
         String current = player.getWorld().getName();
         Optional<WorldEntry> entry = repository.findByWorldName(current);
-        if (entry.isPresent() && entry.get().ownerUuid().equals(player.getUniqueId().toString())) {
+        if (entry.isPresent() && canManageWorld(player, entry.get())) {
             return current;
         }
         return null;
     }
 
     private ItemStack worldIcon(WorldEntry entry, ViewMode mode, String currentWorldName) {
+        return worldIcon(entry, mode, currentWorldName, mode == ViewMode.OWN);
+    }
+
+    private ItemStack worldIcon(WorldEntry entry, ViewMode mode, String currentWorldName, boolean hasSettingsRights) {
         Material material = Material.matchMaterial(entry.iconMaterial());
         if (material == null || !material.isItem()) {
             material = Material.GRASS_BLOCK;
         }
 
         boolean isCurrentWorld = currentWorldName != null && currentWorldName.equalsIgnoreCase(entry.worldName());
-        boolean hasSettingsRights = mode == ViewMode.OWN;
 
         Map<String, String> placeholders = new LinkedHashMap<>();
         placeholders.put("%displayname%", entry.displayName());

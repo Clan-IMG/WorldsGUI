@@ -15,6 +15,7 @@ public final class GuiDefinition {
     private final List<GuiSlotRangeDefinition> slotRanges;
     private final String autoContentSource;
     private final String returnGuiId;
+    private final GuiPagination pagination;
 
     public GuiDefinition(
         String id,
@@ -24,7 +25,8 @@ public final class GuiDefinition {
         Map<Integer, GuiSlotDefinition> rowSlots,
         List<GuiSlotRangeDefinition> slotRanges,
         String autoContentSource,
-        String returnGuiId
+        String returnGuiId,
+        GuiPagination pagination
     ) {
         this.id = id;
         this.size = size;
@@ -34,6 +36,7 @@ public final class GuiDefinition {
         this.slotRanges = slotRanges == null ? List.of() : List.copyOf(slotRanges);
         this.autoContentSource = autoContentSource;
         this.returnGuiId = returnGuiId;
+        this.pagination = pagination;
     }
 
     public String id() {
@@ -82,5 +85,10 @@ public final class GuiDefinition {
      */
     public String returnGuiId() {
         return returnGuiId;
+    }
+
+    /** Blätter-Knöpfe für die automatisch befüllte Welten-Liste, oder null (keine Seiten). */
+    public GuiPagination pagination() {
+        return pagination;
     }
 }

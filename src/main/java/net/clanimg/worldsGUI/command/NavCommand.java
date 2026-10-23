@@ -184,8 +184,16 @@ public final class NavCommand implements TabExecutor {
                         guiManager.executeNavMyWorldBackup(player, args[2], args[3], backupArgument);
                         return true;
                     }
+                    case "chunky" -> {
+                        if (args.length < 3) {
+                            guiManager.sendWithPrefix(player, "usage.nav.my-world.chunky", "Usage: /nav my-world chunky <world-name> [on|off]", "%label%", label);
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldChunky(player, args[2], args.length >= 4 ? args[3] : "toggle");
+                        return true;
+                    }
                     default -> {
-                        guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon|backup> ...", "%label%", label);
+                        guiManager.sendWithPrefix(player, "usage.nav.my-worlds", "Usage: /nav my-worlds <create|clone|import|delete|open|closed|invite|remove|trust|untrust|rename|icon|backup|chunky> ...", "%label%", label);
                         return true;
                     }
                 }
@@ -295,7 +303,20 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 2 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds"))) {
-            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "invite", "remove", "trust", "untrust", "rename", "icon", "backup"), args[1]);
+            return filterPrefix(List.of("create", "clone", "import", "delete", "open", "closed", "invite", "remove", "trust", "untrust", "rename", "icon", "backup", "chunky"), args[1]);
+        }
+
+        if (args.length >= 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("chunky")) {
+            if (args.length == 3) {
+                List<String> suggestions = new ArrayList<>();
+                suggestions.add(((Player) sender).getWorld().getName());
+                suggestions.addAll(guiManager.listOwnedWorldNames((Player) sender));
+                return filterPrefix(suggestions.stream().distinct().toList(), args[2]);
+            }
+            if (args.length == 4) {
+                return filterPrefix(List.of("on", "off"), args[3]);
+            }
+            return List.of();
         }
 
         if (args.length >= 3 && (args[0].equalsIgnoreCase("my-world") || args[0].equalsIgnoreCase("my-worlds")) && args[1].equalsIgnoreCase("backup")) {

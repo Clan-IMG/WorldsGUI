@@ -1,6 +1,8 @@
 package net.clanimg.worldsGUI.guiruntime;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import net.clanimg.worldsGUI.guiconfig.GuiToggleState;
 import net.clanimg.worldsGUI.guiconfig.GuiTrigger;
 import org.bukkit.entity.Player;
@@ -9,7 +11,14 @@ import org.bukkit.entity.Player;
  * Hilfsfunktionen für toggle-Trigger (State-Auflösung und Scope-Key).
  */
 public final class ToggleRuntime {
+    /** Live-Quellen für "state-source" (Name -> (Spieler, Welt) -> State-ID oder null). */
+    private static final Map<String, BiFunction<Player, String, String>> STATE_SOURCES = new ConcurrentHashMap<>();
+
     private ToggleRuntime() {
+    }
+
+    public static void registerStateSource(String name, BiFunction<Player, String, String> resolver) {
+        STATE_SOURCES.put(name.toLowerCase(java.util.Locale.ROOT), resolver);
     }
 
     public static String scopedToggleId(GuiTrigger trigger, Player player, PlayerGuiSession session, Map<String, String> extra) {
@@ -27,6 +36,16 @@ public final class ToggleRuntime {
     }
 
     public static String currentStateId(GuiTrigger trigger, Player player, PlayerGuiSession session, Map<String, String> extra) {
+        String source = trigger.toggleStateSource();
+        if (source != null) {
+            BiFunction<Player, String, String> resolver = STATE_SOURCES.get(source.toLowerCase(java.util.Locale.ROOT));
+            String world = normalize(PlaceholderExpander.expand("%world%", player, session, extra));
+            String live = resolver == null || world.isBlank() || "%world%".equals(world) ? null : resolver.apply(player, world);
+            if (live != null && trigger.toggleStates().containsKey(live)) {
+                return live;
+            }
+        }
+
         String scopedId = scopedToggleId(trigger, player, session, extra);
 
         if (session != null && !scopedId.isBlank()) {

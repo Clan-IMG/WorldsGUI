@@ -105,6 +105,10 @@
 #       next: ""         # Zustand, der danach aktiv ist
 #   Toggle führt den Command SOFORT aus und rendert das aktuelle GUI neu,
 #   ohne das Inventar zu schließen.
+#   state-source: ""   # optional: Zustand LIVE aus dem Plugin statt aus der Session.
+#                       # "chunky" -> "on", wenn für %world% gerade eine Chunky-Vorgenerierung
+#                       # läuft, sonst "off". Damit zeigt der Schalter immer den echten Stand,
+#                       # auch wenn ein Command abgelehnt wurde (z.B. wegen Cooldown).
 #
 # ------------------------------------------------------------
 # CLICK-VARIANTEN
@@ -164,6 +168,31 @@
 #
 # Aufträge liegen dauerhaft in einer Warteschlange und werden von dem Server ausgeführt,
 # auf dem die Welt liegt - auch wenn dieser gerade offline ist oder neu startet.
+#
+# ------------------------------------------------------------
+# PAGINATION (Seiten für automatisch befüllte Welten-Listen)
+# ------------------------------------------------------------
+# GUIs mit automatischer Welten-Anzeige (my-worlds, invited-worlds, tickets,
+# archived-tickets, recent-worlds) zeigen pro Seite so viele Welten, wie freie
+# Slots da sind. Mit einem "pagination"-Block (Top-Level-Feld eines GUIs)
+# erscheinen Blätter-Knöpfe - aber nur, wenn es die Seite auch gibt:
+#   pagination:
+#     previous:
+#       slot: 1            # Zeilen-Slot 1-9 (darf nicht als slot-1..9 belegt sein)
+#       material: "ARROW"
+#       title: "&eVorherige Seite &7(%page%/%pages%)"
+#     next:
+#       slot: 8
+#       material: "ARROW"
+#       title: "&eNächste Seite &7(%page%/%pages%)"
+# Platzhalter: %page% (aktuelle Seite), %pages% (Anzahl Seiten).
+# /nav öffnet immer wieder auf Seite 1.
+#
+# ------------------------------------------------------------
+# WELT-PLATZHALTER (beziehen sich auf %world%)
+# ------------------------------------------------------------
+# %chunky_status%  -> "aus", "läuft" bzw. "läuft (12.3%)" (Texte in messages.yml)
+# %chunky_radius%  -> Vorgenerierungs-Radius in Blöcken (config.yml chunky.radius)
 #
 # ------------------------------------------------------------
 # SELECTION vs. PARAM - wichtiger Unterschied
@@ -288,9 +317,40 @@ guis:
         action:
           trigger: "open-gui"
           gui-id: "tickets"
+      slot-9:
+        material: "NETHER_STAR"
+        title: "&eZuletzt besucht"
+        lore:
+          - "&7Deine 9 zuletzt besuchten Welten."
+        action:
+          trigger: "open-gui"
+          gui-id: "recent-worlds"
+    pagination:
+      previous:
+        slot: 1
+        material: "ARROW"
+        title: "&eVorherige Seite &7(%page%/%pages%)"
+      next:
+        slot: 8
+        material: "ARROW"
+        title: "&eNächste Seite &7(%page%/%pages%)"
 
-  # Rechtsklick auf eine Welt aus der dynamischen Anzeige (my-worlds)
-  # öffnet dieses GUI, um die jeweilige Welt zu bearbeiten.
+  # Die 9 zuletzt besuchten Welten des Spielers (Stern unten rechts in my-worlds).
+  # Linksklick betritt die Welt, Rechtsklick öffnet die Einstellungen (wenn man die Welt verwalten darf).
+  recent-worlds:
+    gui-size: 18
+    title: "Zuletzt besucht"
+    position: bottom # Zeile 2 = Knöpfe, Zeile 1 = die 9 Welten
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+
+  # Rechtsklick auf eine Welt aus der dynamischen Anzeige (my-worlds, recent-worlds,
+  # tickets ...) öffnet dieses GUI, um die jeweilige Welt zu bearbeiten. Erlaubt für den
+  # Besitzer und WorldsGUI-Admins, bei Ticket-Welten auch für eingeladene Teamer (keine Kunden).
   edit-world:
     gui-size: 27
     title: "Welt bearbeiten"
@@ -324,6 +384,29 @@ guis:
           trigger: "command"
           command: "nav setspawn %world%"
           chat-feedback: false
+      slot-6:
+        lore:
+          - "&7Vorgenerierung: &f%chunky_status%"
+          - "&7Radius: &f%chunky_radius% Blöcke um den Spawn"
+          - ""
+          - "&eKlick &7» an-/ausschalten"
+          - "&8Max. 1x pro Minute umschaltbar."
+        action:
+          trigger: "toggle"
+          toggle-id: "chunky"
+          state-source: "chunky" # Zustand kommt live aus Chunky (läuft / läuft nicht)
+          start-state: "off"
+          states: # Schlüssel in Anführungszeichen, sonst liest YAML on/off als true/false
+            "off":
+              material: "RED_CONCRETE"
+              title: "&cChunky: Aus"
+              command: "nav my-world chunky %world% on"
+              next: "on"
+            "on":
+              material: "LIME_CONCRETE"
+              title: "&aChunky: An"
+              command: "nav my-world chunky %world% off"
+              next: "off"
       slot-7:
         material: "ENDER_CHEST"
         title: "Backups"
@@ -575,6 +658,15 @@ guis:
         title: "Zurück"
         action:
           trigger: "return"
+    pagination:
+      previous:
+        slot: 4
+        material: "ARROW"
+        title: "&eVorherige Seite &7(%page%/%pages%)"
+      next:
+        slot: 6
+        material: "ARROW"
+        title: "&eNächste Seite &7(%page%/%pages%)"
 
   tickets:
     gui-size: 54
@@ -592,6 +684,15 @@ guis:
         action:
           trigger: "open-gui"
           gui-id: "archived-tickets"
+    pagination:
+      previous:
+        slot: 4
+        material: "ARROW"
+        title: "&eVorherige Seite &7(%page%/%pages%)"
+      next:
+        slot: 6
+        material: "ARROW"
+        title: "&eNächste Seite &7(%page%/%pages%)"
 
   archived-tickets:
     gui-size: 54
@@ -603,6 +704,15 @@ guis:
         title: "Zurück"
         action:
           trigger: "return"
+    pagination:
+      previous:
+        slot: 4
+        material: "ARROW"
+        title: "&eVorherige Seite &7(%page%/%pages%)"
+      next:
+        slot: 6
+        material: "ARROW"
+        title: "&eNächste Seite &7(%page%/%pages%)"
 
   # Zeigt bereits für %world% eingeladene Spieler als Köpfe an
   # (source: invited-players, WELT-spezifisch, nicht global).

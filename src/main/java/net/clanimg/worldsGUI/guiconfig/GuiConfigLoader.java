@@ -165,8 +165,47 @@ public final class GuiConfigLoader {
         }
 
         String returnGuiId = section.getString("return-gui-id");
+        GuiPagination pagination = parsePagination(guiId, section.getConfigurationSection("pagination"), rowSlots.keySet(), errors);
 
-        return new GuiDefinition(guiId, size, title, position, rowSlots, new ArrayList<>(slotRanges.values()), autoContentSource, returnGuiId);
+        return new GuiDefinition(guiId, size, title, position, rowSlots, new ArrayList<>(slotRanges.values()), autoContentSource, returnGuiId, pagination);
+    }
+
+    /**
+     * pagination:
+     *   previous: { slot: 2, material: "ARROW", title: "...", lore: [...] }
+     *   next:     { slot: 8, material: "ARROW", title: "...", lore: [...] }
+     * Die Slots sind Zeilen-Slots (1-9) und dürfen nicht mit slot-1..9 belegt sein.
+     */
+    private static GuiPagination parsePagination(String guiId, ConfigurationSection section, java.util.Set<Integer> usedRowSlots, List<String> errors) {
+        if (section == null) {
+            return null;
+        }
+        ConfigurationSection previous = section.getConfigurationSection("previous");
+        ConfigurationSection next = section.getConfigurationSection("next");
+        if (previous == null || next == null) {
+            errors.add("GUI '" + guiId + "': 'pagination' benötigt 'previous' und 'next'.");
+            return null;
+        }
+        int previousSlot = previous.getInt("slot", -1);
+        int nextSlot = next.getInt("slot", -1);
+        for (int slot : new int[] {previousSlot, nextSlot}) {
+            if (slot < 1 || slot > 9) {
+                errors.add("GUI '" + guiId + "': pagination-slot muss zwischen 1 und 9 liegen (ist " + slot + ").");
+                return null;
+            }
+            if (usedRowSlots.contains(slot)) {
+                errors.add("GUI '" + guiId + "': pagination-slot " + slot + " ist bereits als slot-" + slot + " belegt.");
+                return null;
+            }
+        }
+        if (previousSlot == nextSlot) {
+            errors.add("GUI '" + guiId + "': pagination 'previous' und 'next' dürfen nicht denselben Slot nutzen.");
+            return null;
+        }
+        return new GuiPagination(
+            previousSlot, previous.getString("material", "ARROW"), previous.getString("title", "&eVorherige Seite"), previous.getStringList("lore"),
+            nextSlot, next.getString("material", "ARROW"), next.getString("title", "&eNächste Seite"), next.getStringList("lore")
+        );
     }
 
     private static GuiSlotDefinition parseSlot(String guiId, String slotKey, ConfigurationSection section, List<String> errors, List<String> warnings) {
@@ -361,7 +400,8 @@ public final class GuiConfigLoader {
                     yield null;
                 }
 
-                yield GuiTrigger.toggle(toggleId, startState, states);
+                String stateSource = triggerSection.getString("state-source");
+                yield GuiTrigger.toggle(toggleId, startState, states, stateSource == null || stateSource.isBlank() ? null : stateSource.trim());
             }
         };
     }

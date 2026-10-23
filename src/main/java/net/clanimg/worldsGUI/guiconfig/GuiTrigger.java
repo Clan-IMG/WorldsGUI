@@ -20,6 +20,7 @@ public final class GuiTrigger {
     private final String toggleId;
     private final String toggleStartState;
     private final Map<String, GuiToggleState> toggleStates;
+    private final String toggleStateSource;
 
     private GuiTrigger(
         TriggerType type,
@@ -34,7 +35,8 @@ public final class GuiTrigger {
         String paramKey,
         String toggleId,
         String toggleStartState,
-        Map<String, GuiToggleState> toggleStates
+        Map<String, GuiToggleState> toggleStates,
+        String toggleStateSource
     ) {
         this.type = type;
         this.command = command;
@@ -49,30 +51,39 @@ public final class GuiTrigger {
         this.toggleId = toggleId;
         this.toggleStartState = toggleStartState;
         this.toggleStates = toggleStates == null ? Map.of() : Map.copyOf(toggleStates);
+        this.toggleStateSource = toggleStateSource;
     }
 
     public static GuiTrigger command(String command, int clicks, boolean chatFeedback, String guiId) {
-        return new GuiTrigger(TriggerType.COMMAND, command, Math.max(1, clicks), chatFeedback, guiId, null, null, null, null, null, null, null, null);
+        return new GuiTrigger(TriggerType.COMMAND, command, Math.max(1, clicks), chatFeedback, guiId, null, null, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger openGui(String guiId, Map<String, String> params) {
-        return new GuiTrigger(TriggerType.OPEN_GUI, null, 1, true, guiId, params, null, null, null, null, null, null, null);
+        return new GuiTrigger(TriggerType.OPEN_GUI, null, 1, true, guiId, params, null, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger returnTrigger() {
-        return new GuiTrigger(TriggerType.RETURN, null, 1, true, null, null, null, null, null, null, null, null, null);
+        return new GuiTrigger(TriggerType.RETURN, null, 1, true, null, null, null, null, null, null, null, null, null, null);
     }
 
     public static GuiTrigger select(String selectId, String selectValue, String guiId, Map<String, String> params) {
-        return new GuiTrigger(TriggerType.SELECT, null, 1, true, guiId, params, selectId, selectValue, null, null, null, null, null);
+        return new GuiTrigger(TriggerType.SELECT, null, 1, true, guiId, params, selectId, selectValue, null, null, null, null, null, null);
     }
 
     public static GuiTrigger anvilInput(String anvilTitle, String guiId, String paramKey, Map<String, String> params) {
-        return new GuiTrigger(TriggerType.ANVIL_INPUT, null, 1, true, guiId, params, null, null, anvilTitle, paramKey, null, null, null);
+        return new GuiTrigger(TriggerType.ANVIL_INPUT, null, 1, true, guiId, params, null, null, anvilTitle, paramKey, null, null, null, null);
     }
 
     public static GuiTrigger toggle(String toggleId, String startState, Map<String, GuiToggleState> states) {
-        return new GuiTrigger(TriggerType.TOGGLE, null, 1, true, null, null, null, null, null, null, toggleId, startState, states);
+        return toggle(toggleId, startState, states, null);
+    }
+
+    /**
+     * @param stateSource optional: Name einer im Plugin registrierten Live-Quelle (z.B. "chunky"), die den aktuellen
+     *                    Zustand bestimmt. Ohne Quelle merkt sich die Session den Zustand.
+     */
+    public static GuiTrigger toggle(String toggleId, String startState, Map<String, GuiToggleState> states, String stateSource) {
+        return new GuiTrigger(TriggerType.TOGGLE, null, 1, true, null, null, null, null, null, null, toggleId, startState, states, stateSource);
     }
 
     public TriggerType type() {
@@ -125,5 +136,10 @@ public final class GuiTrigger {
 
     public Map<String, GuiToggleState> toggleStates() {
         return toggleStates;
+    }
+
+    /** Live-Quelle des Toggle-Zustands (Feld "state-source" in guis.yml), oder null. */
+    public String toggleStateSource() {
+        return toggleStateSource;
     }
 }

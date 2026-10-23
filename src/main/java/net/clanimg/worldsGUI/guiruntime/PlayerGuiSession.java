@@ -16,6 +16,7 @@ public final class PlayerGuiSession {
     private final Map<String, String> params = new LinkedHashMap<>();
     private final Map<String, String> guiParams = new LinkedHashMap<>();
     private final Map<String, Integer> clickCounters = new LinkedHashMap<>();
+    private final Map<String, Integer> pages = new LinkedHashMap<>();
     private final Deque<String> history = new ArrayDeque<>();
     private String currentGuiId;
     private String currentWorld;
@@ -92,6 +93,21 @@ public final class PlayerGuiSession {
         history.clear();
     }
 
+    /** Aktuelle Seite (0-basiert) der Welten-Liste in diesem GUI. */
+    public int page(String guiId) {
+        return guiId == null ? 0 : pages.getOrDefault(guiId, 0);
+    }
+
+    public void setPage(String guiId, int page) {
+        if (guiId != null) {
+            pages.put(guiId, Math.max(0, page));
+        }
+    }
+
+    public void resetPages() {
+        pages.clear();
+    }
+
     public int incrementClickCounter(String key) {
         return clickCounters.merge(key, 1, Integer::sum);
     }
@@ -105,6 +121,7 @@ public final class PlayerGuiSession {
         params.clear();
         guiParams.clear();
         clickCounters.clear();
+        pages.clear();
         history.clear();
         currentGuiId = null;
         currentWorld = null;

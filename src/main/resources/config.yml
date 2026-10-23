@@ -84,9 +84,19 @@ backup:
   display-timezone: "Europe/Berlin"
 
 chunky:
-  # Radius in Blöcken um den Spawn, den Chunky bei neuen Welten vorgeneriert (Kreis).
+  # Vorgenerierung ist standardmäßig AUS. Einschalten pro Welt: Rechtsklick auf die Welt
+  # -> "Chunky" (oder /nav my-world chunky <welt> on). Läuft nur, solange die Welt geladen ist.
+  # Radius in Blöcken um den Spawn (Kreis).
   # Aufwand und Speicher wachsen quadratisch: doppelter Radius = ca. 4x so viele Chunks.
   radius: 2500
+
+  # Wie lange nach dem Umschalten eine Welt gesperrt ist (Schutz gegen schnelles An/Aus).
+  # Gilt nicht für worldsgui.admin.
+  toggle-cooldown-seconds: 60
+
+  # Höchstens so viele Vorgenerierungen gleichzeitig auf diesem Server (jede lastet CPU und
+  # Festplatte aus). Gilt nicht für worldsgui.admin.
+  max-parallel-tasks: 2
 
 idle-unload:
   # Entlädt eine private Einzelspieler-Welt automatisch, sobald niemand mehr darin ist - aber

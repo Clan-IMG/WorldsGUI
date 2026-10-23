@@ -17,7 +17,15 @@ public final class PlaceholderExpander {
     private static final Pattern SELECTION_PATTERN = Pattern.compile("%selection:([a-zA-Z0-9_-]+)%");
     private static final Pattern PARAM_PATTERN = Pattern.compile("%param:([a-zA-Z0-9_-]+)%");
 
+    /** Vom Plugin registrierte Platzhalter, die von der aktuellen Welt abhängen (z.B. %chunky_status%). */
+    private static final Map<String, java.util.function.BiFunction<Player, String, String>> WORLD_PLACEHOLDERS =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
     private PlaceholderExpander() {
+    }
+
+    public static void registerWorldPlaceholder(String key, java.util.function.BiFunction<Player, String, String> resolver) {
+        WORLD_PLACEHOLDERS.put(key, resolver);
     }
 
     /**
@@ -41,6 +49,13 @@ public final class PlaceholderExpander {
         if (world != null) {
             result = result.replace("%world%", world);
             result = result.replace("%world_id%", world);
+            for (Map.Entry<String, java.util.function.BiFunction<Player, String, String>> entry : WORLD_PLACEHOLDERS.entrySet()) {
+                String placeholder = "%" + entry.getKey() + "%";
+                if (result.contains(placeholder)) {
+                    String value = entry.getValue().apply(player, world);
+                    result = result.replace(placeholder, value == null ? "" : value);
+                }
+            }
         }
 
         if (extra != null) {
