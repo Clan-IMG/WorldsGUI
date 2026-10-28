@@ -1716,12 +1716,9 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+        // Auch Ticket-Welten haben Backups: verwalten dürfen Besitzer, Admins und eingeladene Teamer (keine Kunden).
+        if (!canManageWorld(player, entry)) {
             send(player, "not-world-owner");
-            return;
-        }
-        if (isTicketWorld(entry)) {
-            sendWithPrefix(player, "backup.not-available", "Für Ticket-Welten gibt es keine Backups.");
             return;
         }
 

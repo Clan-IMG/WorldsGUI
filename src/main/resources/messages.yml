@@ -171,7 +171,6 @@ with-prefix:
   setspawn-ticket-no-permission: "Für Ticket-Welten fehlt dir die Berechtigung, den Spawn zu setzen."
   setspawn-api-unreachable: "Die Welten-API ist gerade nicht erreichbar. Bitte versuche es gleich nochmal."
   backup.disabled: "Backups sind auf diesem Server deaktiviert."
-  backup.not-available: "Für Ticket-Welten gibt es keine Backups."
   backup.invalid-id: "Ungültige Backup- bzw. Auftrags-ID."
   backup.queued-backup: "Backup für &f%world%&7 wurde eingereiht. Du wirst benachrichtigt, sobald es fertig ist."
   backup.queued-restore: "Wiederherstellung von &f%world%&7 wurde eingereiht. Die Welt ist dabei kurz nicht erreichbar, du wirst benachrichtigt."
