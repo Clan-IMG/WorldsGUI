@@ -20,6 +20,8 @@ public final class Permissions {
     public static final String NAV_MY_WORLD_RENAME = "worldsgui.command.nav.my-world.rename";
     public static final String NAV_MY_WORLD_ICON = "worldsgui.command.nav.my-world.icon";
     public static final String NAV_MY_WORLD_CLONE = "worldsgui.command.nav.my-world.clone";
+    /** Duplizieren auch auf Server aus api.blocked-server-names (z.B. eine Welt in die Lobby bringen). */
+    public static final String NAV_MY_WORLD_CLONE_ANY_SERVER = "worldsgui.command.nav.my-world.clone.any-server";
     public static final String NAV_MY_WORLD_IMPORT = "worldsgui.command.nav.my-world.import";
     public static final String NAV_MY_WORLD_BACKUP = "worldsgui.command.nav.my-world.backup";
     public static final String NAV_MY_WORLD_CHUNKY = "worldsgui.command.nav.my-world.chunky";

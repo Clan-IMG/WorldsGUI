@@ -104,6 +104,9 @@ permissions:
   worldsgui.command.nav.my-world.clone:
     description: Erlaubt /nav my-world clone <world-name> [player]
     default: op
+  worldsgui.command.nav.my-world.clone.any-server:
+    description: Beim Duplizieren (Shift-Rechtsklick) alle Server mit WorldsGUI auswählbar, auch die aus api.blocked-server-names
+    default: op
   worldsgui.command.nav.my-world.import:
     description: Erlaubt /nav my-world import <world-name> <player>
     default: op

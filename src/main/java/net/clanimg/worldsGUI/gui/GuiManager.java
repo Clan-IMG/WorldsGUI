@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Stream;
 import java.util.concurrent.CompletableFuture;
@@ -543,8 +544,11 @@ public final class GuiManager {
         }
 
         if ("servers".equalsIgnoreCase(source)) {
+            List<String> servers = "duplicate".equalsIgnoreCase(session.guiParam("server-purpose"))
+                ? resolveDuplicateTargetServerNames(player)
+                : resolveSelectableServerNames();
             List<Map<String, String>> items = new ArrayList<>();
-            for (String serverName : resolveSelectableServerNames()) {
+            for (String serverName : servers) {
                 items.add(Map.of("server_id", serverName, "server_name", serverName));
             }
             return applySlotRangeFilter(items, filter);
@@ -2232,6 +2236,28 @@ public final class GuiManager {
         openGui(player, "select-server");
     }
 
+    /** Darf auch auf Server duplizieren, auf denen keine Welten erstellt werden (api.blocked-server-names). */
+    private boolean mayDuplicateToAnyServer(Player player) {
+        return player.hasPermission(Permissions.NAV_MY_WORLD_CLONE_ANY_SERVER) || player.hasPermission(Permissions.ADMIN);
+    }
+
+    /**
+     * Zielserver fürs Duplizieren. Mit {@link Permissions#NAV_MY_WORLD_CLONE_ANY_SERVER}: jeder Server, auf dem WorldsGUI
+     * gerade läuft (Heartbeat an die API) - auch gesperrte wie die Lobby. Sonst dieselbe Auswahl wie beim Erstellen.
+     */
+    private List<String> resolveDuplicateTargetServerNames(Player player) {
+        if (!mayDuplicateToAnyServer(player)) {
+            return resolveSelectableServerNames();
+        }
+        Set<String> servers = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        servers.addAll(repository.listOnlineServerNames(20));
+        String explicitLocal = resolveExplicitLocalServerId();
+        if (!explicitLocal.isBlank()) {
+            servers.add(explicitLocal);
+        }
+        return servers.isEmpty() ? resolveSelectableServerNames() : new ArrayList<>(servers);
+    }
+
     private boolean checkDuplicateSource(Player player, WorldEntry entry) {
         if (entry.isArchived()) {
             sendWithPrefix(player, "duplicate.archived", "&cArchivierte Welten können nicht dupliziert werden.");
@@ -2268,11 +2294,11 @@ public final class GuiManager {
             send(player, "create.server-missing");
             return;
         }
-        if (isBlockedServerName(requestedServer)) {
+        if (isBlockedServerName(requestedServer) && !mayDuplicateToAnyServer(player)) {
             send(player, "create.server-blocked", "%server%", requestedServer);
             return;
         }
-        List<String> selectableServers = resolveSelectableServerNames();
+        List<String> selectableServers = resolveDuplicateTargetServerNames(player);
         Optional<String> knownServer = selectableServers.stream().filter(server -> server.equalsIgnoreCase(requestedServer)).findFirst();
         if (!selectableServers.isEmpty() && knownServer.isEmpty()) {
             send(player, "create.server-unknown", "%server%", requestedServer);
@@ -2314,7 +2340,7 @@ public final class GuiManager {
     }
 
     private void duplicateLocally(Player player, WorldEntry source, String copyName, String copyDisplayName, String localServer) {
-        if (!checkLocalWorldCreation(player)) {
+        if (!mayDuplicateToAnyServer(player) && !checkLocalWorldCreation(player)) {
             return;
         }
         boolean cloneTriggered = generationDebug.dispatchCommand("duplicateLocally.clone@GuiManager", Bukkit.getConsoleSender(),

@@ -219,10 +219,11 @@
 # ------------------------------------------------------------
 # BEKANNTE EINSCHRÄNKUNGEN (bewusst akzeptiert, kein Bug)
 # ------------------------------------------------------------
-# - select-server: from 3 bis 8 (6 Slots) hat KEINE Pagination.
-#   Bei mehr als 6 Servern werden überzählige Server abgeschnitten,
-#   nicht auf einer zweiten Seite angezeigt. Aktuell ok, da die
-#   Server-Anzahl klein bleibt.
+# - select-server: from 0 bis 17 (18 Slots) hat KEINE Pagination.
+#   Bei mehr als 18 Servern werden überzählige Server abgeschnitten,
+#   nicht auf einer zweiten Seite angezeigt. Beim Duplizieren stehen
+#   (mit worldsgui.command.nav.my-world.clone.any-server) alle Server
+#   mit WorldsGUI zur Wahl, auch gesperrte wie die Lobby.
 # - invited-friends / select-friend: from 0 bis 44 (45 Slots) hat
 #   ebenfalls keine Pagination. Bei mehr als 45 getrusteten Spielern
 #   bzw. Suchtreffern würde die Liste abgeschnitten.
@@ -331,9 +332,11 @@ guis:
           left-click:
             trigger: "command"
             command: "nav sort next" # baut "Meine Welten" mit der neuen Sortierung neu auf
+            chat-feedback: false # Menü bleibt offen und wird direkt neu sortiert
           right-click:
             trigger: "command"
-            command: "nav sort previous" # baut "Meine Welten" mit der neuen Sortierung neu auf
+            command: "nav sort previous"
+            chat-feedback: false
       slot-9:
         material: "GRASS_BLOCK"
         title: "Welt erstellen"
@@ -630,7 +633,7 @@ guis:
   select-server:
     gui-size: 27
     title: "Server auswählen"
-    position: middle
+    position: bottom
     slots:
       slot-1:
         material: "SPRUCE_DOOR"
@@ -638,8 +641,8 @@ guis:
         action:
           trigger: "return"
       slot-range:
-        from: 3
-        to: 8 # keine zweite Seite, da wenige Server erwartet werden - sonst Abschneiden bekannter Kompromiss
+        from: 0
+        to: 17 # zwei Reihen, keine zweite Seite - mehr als 18 Server werden abgeschnitten
         source: "servers" # Plugin holt sich intern die Liste verfügbarer Server
         material: "GRASS_BLOCK"
         title: "%server_name%" # Anzeigename pro generiertem Item

@@ -48,6 +48,8 @@ public final class GuiConfigLoader {
      * Angepasste Dateien bleiben unangetastet. Beim Ändern der guis.yml den Hash der alten Version hier ergänzen.
      */
     static final Set<String> SUPERSEDED_DEFAULT_HASHES = Set.of(
+        "3df5cacfac74668c47c384811c029705e49df2181d8902b222e85cfd3be5ec05",
+        "a6c4a0110bd317371ad9c4e9b4f178456675f04b3dc2f41a8840cc2412816b81",
         "c96d88033aabc0834c94a34c4a7c8bc3e31271084d60a0f5e95c60b183b09387",
         "0835323c8844e77df957a10009205470b6a5b8e9300a156d94b2fee9074a30db",
         "1bb5f75a91b8d041afab94287402554837df1aa7b9f908596fd2f9221966bfd3",

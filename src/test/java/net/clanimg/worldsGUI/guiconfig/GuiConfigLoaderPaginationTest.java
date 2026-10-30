@@ -27,6 +27,8 @@ class GuiConfigLoaderPaginationTest {
         GuiAction sort = myWorlds.rowSlots().get(3).action();
         assertEquals("nav sort next", sort.leftClickTrigger().command());
         assertEquals("nav sort previous", sort.rightClickTrigger().command());
+        assertFalse(sort.leftClickTrigger().chatFeedback(), "sonst schließt sich das Menü beim Sortieren");
+        assertFalse(sort.rightClickTrigger().chatFeedback(), "sonst schließt sich das Menü beim Sortieren");
         assertEquals("create-world", myWorlds.rowSlots().get(9).action().anyClickTrigger().guiId());
         assertNull(myWorlds.rowSlots().get(4));
         assertNotNull(myWorlds.pagination());
@@ -45,7 +47,10 @@ class GuiConfigLoaderPaginationTest {
     void serverSelectionIsSharedByCreateAndDuplicate() throws Exception {
         GuiConfig config = GuiConfigLoader.loadFromYaml(bundledYaml(), LOGGER);
 
-        GuiTrigger pickServer = config.get("select-server").orElseThrow().slotRanges().get(0).action().anyClickTrigger();
+        GuiSlotRangeDefinition servers = config.get("select-server").orElseThrow().slotRanges().get(0);
+        assertEquals(0, servers.from(), "zwei volle Reihen, damit beim Duplizieren alle Server Platz haben");
+        assertEquals(17, servers.to());
+        GuiTrigger pickServer = servers.action().anyClickTrigger();
         assertEquals("nav server-selected %server-purpose% %selection:server%", pickServer.params().get("confirm-command"));
         for (int slot : new int[] {5, 7}) {
             GuiTrigger worldType = config.get("create-world").orElseThrow().rowSlots().get(slot).action().anyClickTrigger();
@@ -64,6 +69,10 @@ class GuiConfigLoaderPaginationTest {
             "sonst würde die aktuelle guis.yml bei jedem Start erneut ersetzt");
         assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
             "c96d88033aabc0834c94a34c4a7c8bc3e31271084d60a0f5e95c60b183b09387"), "Stand vom 23.10.2026 auf den Servern");
+        assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
+            "a6c4a0110bd317371ad9c4e9b4f178456675f04b3dc2f41a8840cc2412816b81"), "Stand vom 30.10.2026 (Sortier-Item schloss das Menü)");
+        assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
+            "3df5cacfac74668c47c384811c029705e49df2181d8902b222e85cfd3be5ec05"), "Stand vom 30.10.2026 (Serverauswahl mit nur 6 Plätzen)");
     }
 
     private YamlConfiguration bundledYaml() throws Exception {
