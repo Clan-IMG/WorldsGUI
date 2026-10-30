@@ -1,5 +1,6 @@
 package net.clanimg.worldsGUI.gui;
 
+import com.google.gson.JsonObject;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.File;
 import java.io.IOException;
@@ -16,7 +17,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Stream;
 import java.util.concurrent.CompletableFuture;
@@ -33,6 +33,7 @@ import java.nio.file.Path;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
 import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldguard.WorldGuard;
@@ -54,6 +55,7 @@ import net.clanimg.worldsGUI.diagnostics.WorldGenerationDebug;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupApiResult;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupEntry;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupJob;
+import net.clanimg.worldsGUI.data.WorldsRepository.KnownServer;
 import net.clanimg.worldsGUI.data.WorldsRepository.WorldBackupOverview;
 import net.clanimg.worldsGUI.guiconfig.GuiAction;
 import net.clanimg.worldsGUI.guiconfig.GuiConfig;
@@ -167,6 +169,10 @@ public final class GuiManager {
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, String> lastAppliedLuckPermsState = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
+    /** Offene Auswahl im GUI "select-instance": welche Welt, welche Instanzen standen zur Wahl. */
+    private final Map<UUID, InstanceChoice> instanceChoices = new ConcurrentHashMap<>();
+
+    private record InstanceChoice(String worldName, List<CloudInstances.Instance> instances) {}
     private final Set<UUID> suppressedChatFeedbackPlayers = ConcurrentHashMap.newKeySet();
     private final Set<String> metadataWorldCreationsInProgress = ConcurrentHashMap.newKeySet();
     private volatile boolean warnedMissingLocalServerId;
@@ -544,12 +550,30 @@ public final class GuiManager {
         }
 
         if ("servers".equalsIgnoreCase(source)) {
-            List<String> servers = "duplicate".equalsIgnoreCase(session.guiParam("server-purpose"))
-                ? resolveDuplicateTargetServerNames(player)
-                : resolveSelectableServerNames();
             List<Map<String, String>> items = new ArrayList<>();
-            for (String serverName : servers) {
+            if ("duplicate".equalsIgnoreCase(session.guiParam("server-purpose"))) {
+                for (KnownServer server : resolveDuplicateTargets(player)) {
+                    items.add(Map.of("server_id", server.name(),
+                        "server_name", server.online() ? server.name() : server.name() + " &8(offline)"));
+                }
+                return applySlotRangeFilter(items, filter);
+            }
+            for (String serverName : resolveSelectableServerNames()) {
                 items.add(Map.of("server_id", serverName, "server_name", serverName));
+            }
+            return applySlotRangeFilter(items, filter);
+        }
+
+        if ("world-instances".equalsIgnoreCase(source)) {
+            InstanceChoice choice = instanceChoices.get(player.getUniqueId());
+            List<Map<String, String>> items = new ArrayList<>();
+            for (CloudInstances.Instance instance : choice == null ? List.<CloudInstances.Instance>of() : choice.instances()) {
+                items.add(Map.of(
+                    "instance_id", instance.serverId(),
+                    "instance_name", instance.name(),
+                    "instance_here", instance.current() ? "&a(du bist hier)" : "",
+                    "instance_players", Integer.toString(instance.players()),
+                    "instance_max_players", Integer.toString(instance.maxPlayers())));
             }
             return applySlotRangeFilter(items, filter);
         }
@@ -2157,6 +2181,7 @@ public final class GuiManager {
 
     public void handlePlayerQuit(Player player) {
         recentWorlds.forget(player.getUniqueId());
+        instanceChoices.remove(player.getUniqueId());
     }
 
     /** Sortierung bzw. Besuche kamen erst nach dem Öffnen aus der API - offenes "Meine Welten" neu aufbauen. */
@@ -2243,19 +2268,20 @@ public final class GuiManager {
 
     /**
      * Zielserver fürs Duplizieren. Mit {@link Permissions#NAV_MY_WORLD_CLONE_ANY_SERVER}: jeder Server, auf dem WorldsGUI
-     * gerade läuft (Heartbeat an die API) - auch gesperrte wie die Lobby. Sonst dieselbe Auswahl wie beim Erstellen.
+     * installiert ist - erkannt am Heartbeat an die API in den letzten {@code api.duplicate-server-max-age-days} Tagen,
+     * also auch gerade ausgeschaltete und gesperrte wie die Lobby. Sonst dieselbe Auswahl wie beim Erstellen.
      */
-    private List<String> resolveDuplicateTargetServerNames(Player player) {
-        if (!mayDuplicateToAnyServer(player)) {
-            return resolveSelectableServerNames();
+    private List<KnownServer> resolveDuplicateTargets(Player player) {
+        if (mayDuplicateToAnyServer(player)) {
+            int maxAgeDays = Math.max(1, plugin.getConfig().getInt("api.duplicate-server-max-age-days", 90));
+            Optional<List<KnownServer>> known = repository.listKnownServers(maxAgeDays, 20);
+            List<String> online = known.isPresent() ? List.of() : repository.listOnlineServerNames(20);
+            List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(known, online, resolveExplicitLocalServerId());
+            if (!targets.isEmpty()) {
+                return targets;
+            }
         }
-        Set<String> servers = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
-        servers.addAll(repository.listOnlineServerNames(20));
-        String explicitLocal = resolveExplicitLocalServerId();
-        if (!explicitLocal.isBlank()) {
-            servers.add(explicitLocal);
-        }
-        return servers.isEmpty() ? resolveSelectableServerNames() : new ArrayList<>(servers);
+        return resolveSelectableServerNames().stream().map(name -> new KnownServer(name, true)).toList();
     }
 
     private boolean checkDuplicateSource(Player player, WorldEntry entry) {
@@ -2298,13 +2324,15 @@ public final class GuiManager {
             send(player, "create.server-blocked", "%server%", requestedServer);
             return;
         }
-        List<String> selectableServers = resolveDuplicateTargetServerNames(player);
-        Optional<String> knownServer = selectableServers.stream().filter(server -> server.equalsIgnoreCase(requestedServer)).findFirst();
+        List<KnownServer> selectableServers = resolveDuplicateTargets(player);
+        Optional<KnownServer> knownServer = selectableServers.stream()
+            .filter(server -> server.name().equalsIgnoreCase(requestedServer)).findFirst();
         if (!selectableServers.isEmpty() && knownServer.isEmpty()) {
             send(player, "create.server-unknown", "%server%", requestedServer);
             return;
         }
-        String targetServer = knownServer.orElse(requestedServer);
+        String targetServer = knownServer.map(KnownServer::name).orElse(requestedServer);
+        boolean targetOnline = knownServer.map(KnownServer::online).orElse(true);
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             Optional<WorldEntry> sourceOpt = repository.findByWorldName(sourceName);
@@ -2333,7 +2361,7 @@ public final class GuiManager {
                 if (localSourceAndTarget) {
                     duplicateLocally(player, source, copyName, copyDisplayName, localServer);
                 } else {
-                    duplicateViaBackup(player, source, copyName, copyDisplayName, targetServer);
+                    duplicateViaBackup(player, source, copyName, copyDisplayName, targetServer, targetOnline);
                 }
             });
         });
@@ -2380,7 +2408,8 @@ public final class GuiManager {
         }, 20L);
     }
 
-    private void duplicateViaBackup(Player player, WorldEntry source, String copyName, String copyDisplayName, String targetServer) {
+    private void duplicateViaBackup(Player player, WorldEntry source, String copyName, String copyDisplayName, String targetServer,
+                                    boolean targetOnline) {
         if (!backupService.isEnabled()) {
             sendWithPrefix(player, "duplicate.backups-disabled",
                 "&cDuplizieren auf einen anderen Server braucht das Backup-System - es ist auf diesem Server nicht aktiv.");
@@ -2390,6 +2419,10 @@ public final class GuiManager {
             "&7Die Welt &f%source%&7 wird als &f%copy%&7 auf &f%server%&7 dupliziert. Je nach Weltgröße dauert das einen Moment"
                 + " - du bekommst eine Nachricht, sobald sie fertig ist.",
             "%source%", displayOrWorldName(source), "%copy%", copyDisplayName, "%server%", targetServer);
+        if (!targetOnline) {
+            sendWithPrefix(player, "duplicate.target-offline",
+                "&7Der Server &f%server%&7 ist gerade aus - die Kopie entsteht, sobald er wieder startet.", "%server%", targetServer);
+        }
         String requestedBy = player.getName();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             if (!persistDuplicateMetadata(source, copyName, copyDisplayName, targetServer)) {
@@ -4997,14 +5030,16 @@ public final class GuiManager {
         }
 
         WorldEntry entry = entryOpt.get();
-        boolean isOwner = entry.ownerUuid().equals(player.getUniqueId().toString());
-        boolean invited = containsIgnoreCase(entry.invitedPlayers(), player.getName());
-        boolean canAccess = isOwner || invited || entry.isPublic() || player.hasPermission(Permissions.ADMIN);
-        if (!canAccess) {
+        if (!canEnterWorld(player, entry)) {
             if (notify) {
                 send(player, "world-private");
             }
             return false;
+        }
+
+        if (mayRunOnSeveralInstances(entry)) {
+            chooseInstanceAndJoin(player, entry, notify);
+            return true;
         }
 
         if (!isWorldOnThisServer(entry)) {
@@ -5016,6 +5051,139 @@ public final class GuiManager {
         }
 
         return joinWorldLocally(player, entry, notify);
+    }
+
+    private boolean canEnterWorld(Player player, WorldEntry entry) {
+        boolean isOwner = entry.ownerUuid().equals(player.getUniqueId().toString());
+        boolean invited = containsIgnoreCase(entry.invitedPlayers(), player.getName());
+        return isOwner || invited || entry.isPublic() || player.hasPermission(Permissions.ADMIN);
+    }
+
+    // ------------------------------------------------------------------ Welten auf Templates (z.B. lobby -> lobby-1, lobby-2)
+
+    /**
+     * Ob die Welt auf einer Servergruppe mit mehreren Instanzen liegen könnte: jede Welt auf einem anderen Server (ob
+     * das ein Template ist, weiß erst der Controller) und eine Welt auf der Gruppe, deren Instanz dieser Server ist.
+     */
+    private boolean mayRunOnSeveralInstances(WorldEntry entry) {
+        return !isWorldOnThisServer(entry)
+            || (localNumericalId() >= 0 && isSameServerIdentifier(entry.serverName(), System.getenv("SIMPLECLOUD_GROUP")));
+    }
+
+    /** SIMPLECLOUD_NUMERICAL_ID dieses Servers: 1, 2, ... bei Instanzen eines Templates, -1 bei persistenten Servern. */
+    private static int localNumericalId() {
+        try {
+            String value = System.getenv("SIMPLECLOUD_NUMERICAL_ID");
+            return value == null ? -1 : Integer.parseInt(value.trim());
+        } catch (NumberFormatException ex) {
+            return -1;
+        }
+    }
+
+    /**
+     * Eine Welt auf einem Template (z.B. "lobby") gibt es auf jeder laufenden Instanz (lobby-1, lobby-2, ...). Laufen
+     * mehrere, wählt der Spieler im GUI "select-instance", auf welche er geht. Sonst (persistenter Server, Controller
+     * nicht erreichbar) wie bisher.
+     */
+    private void chooseInstanceAndJoin(Player player, WorldEntry entry, boolean notify) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            List<CloudInstances.Instance> instances = fetchGroupInstances(entry.serverName());
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                if (instances.size() > 1) {
+                    offerInstanceChoice(player, entry, instances, notify);
+                } else if (instances.size() == 1) {
+                    joinInstance(player, entry, instances.get(0), notify);
+                } else if (isWorldOnThisServer(entry)) {
+                    joinWorldLocally(player, entry, notify);
+                } else {
+                    if (notify) {
+                        send(player, "join.remote-world-connecting");
+                    }
+                    connectPlayerToWorldServer(player, entry);
+                }
+            });
+        });
+    }
+
+    private void offerInstanceChoice(Player player, WorldEntry entry, List<CloudInstances.Instance> instances, boolean notify) {
+        if (guiConfig == null || guiConfig.get("select-instance").isEmpty()) {
+            // guis.yml ohne Auswahl-GUI: auf dieser Instanz bleiben bzw. die leerste nehmen
+            CloudInstances.Instance pick = instances.stream().filter(CloudInstances.Instance::current).findFirst()
+                .orElseGet(() -> instances.stream().min(Comparator.comparingInt(CloudInstances.Instance::players)).orElseThrow());
+            joinInstance(player, entry, pick, notify);
+            return;
+        }
+        instanceChoices.put(player.getUniqueId(), new InstanceChoice(entry.worldName(), List.copyOf(instances)));
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        session.putGuiParams(Map.of("instance-world", displayOrWorldName(entry)));
+        session.pushCurrentToHistory();
+        openGui(player, "select-instance");
+    }
+
+    /** /nav join-instance &lt;server-id&gt; - Klick im GUI "select-instance". */
+    public void executeJoinInstance(Player player, String serverId) {
+        InstanceChoice choice = instanceChoices.remove(player.getUniqueId());
+        Optional<CloudInstances.Instance> instance = choice == null ? Optional.empty()
+            : choice.instances().stream().filter(candidate -> candidate.serverId().equals(serverId)).findFirst();
+        if (instance.isEmpty()) {
+            sendWithPrefix(player, "join.instance-expired", "&cDiese Auswahl ist nicht mehr aktuell - klicke die Welt erneut an.");
+            return;
+        }
+        Optional<WorldEntry> entry = repository.findByWorldName(choice.worldName());
+        if (entry.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+        if (!canEnterWorld(player, entry.get())) {
+            send(player, "world-private");
+            return;
+        }
+        joinInstance(player, entry.get(), instance.get(), true);
+    }
+
+    private void joinInstance(Player player, WorldEntry entry, CloudInstances.Instance instance, boolean notify) {
+        if (instance.current()) {
+            joinWorldLocally(player, entry, notify);
+            return;
+        }
+        if (notify) {
+            send(player, "join.remote-world-connecting");
+        }
+        connectPlayerToWorldServer(player, entry, instance.serverId(), instance.name());
+    }
+
+    /** Laufende Instanzen der Servergruppe {@code group} laut Controller ({@code GET /v0/servers}); leer bei Fehler. */
+    private List<CloudInstances.Instance> fetchGroupInstances(String group) {
+        String controllerUrl = plugin.getConfig().getString("simplecloud.controller-url", "");
+        String networkId = plugin.getConfig().getString("simplecloud.network-id", "");
+        String networkSecret = plugin.getConfig().getString("simplecloud.network-secret", "");
+        if (group == null || group.isBlank() || controllerUrl == null || controllerUrl.isBlank()
+            || networkId == null || networkId.isBlank() || networkSecret == null || networkSecret.isBlank()) {
+            return List.of();
+        }
+        String normalizedController = controllerUrl.endsWith("/") ? controllerUrl.substring(0, controllerUrl.length() - 1) : controllerUrl;
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(normalizedController + "/v0/servers"))
+                .timeout(Duration.ofSeconds(5))
+                .header("Accept", "application/json")
+                .header("X-Network-ID", networkId)
+                .header("X-Network-Secret", networkSecret)
+                .GET()
+                .build();
+            HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() / 100 != 2) {
+                plugin.getLogger().warning("SimpleCloud-Serverliste nicht abrufbar: HTTP " + response.statusCode());
+                return List.of();
+            }
+            return CloudInstances.parse(response.body(), group, System.getenv("SIMPLECLOUD_GROUP"), localNumericalId());
+        } catch (Exception ex) {
+            plugin.getLogger().warning("SimpleCloud-Serverliste nicht abrufbar: " + ex.getMessage());
+            return List.of();
+        }
     }
 
     private boolean joinWorldLocally(Player player, WorldEntry entry, boolean notify) {
@@ -5448,6 +5616,15 @@ public final class GuiManager {
     }
 
     private void connectPlayerToWorldServer(Player player, WorldEntry entry) {
+        connectPlayerToWorldServer(player, entry, null, null);
+    }
+
+    /**
+     * @param instanceServerId fester Zielserver ({@code server_id} aus der Controller-Serverliste, z.B. eine gewählte
+     *                         Lobby-Instanz) oder null = Server der Welt (mit Ausweichen auf einen Online-Server)
+     * @param instanceName     Anzeigename dieses Zielservers für die Chat-Nachricht
+     */
+    private void connectPlayerToWorldServer(Player player, WorldEntry entry, String instanceServerId, String instanceName) {
         String targetServer = entry.serverName();
         if (targetServer == null || targetServer.isBlank()) {
             send(player, "connect.target-server-missing");
@@ -5471,8 +5648,11 @@ public final class GuiManager {
 
             String message;
             boolean alreadyConnected = false;
-            String effectiveTargetServer = resolveEffectiveConnectTargetServer(targetServer);
-            String payload = "{\"server_id\":\"" + effectiveTargetServer + "\"}";
+            String effectiveTargetServer = instanceServerId != null ? instanceServerId : resolveEffectiveConnectTargetServer(targetServer);
+            String shownServer = instanceServerId != null ? instanceName : effectiveTargetServer;
+            JsonObject connectBody = new JsonObject();
+            connectBody.addProperty("server_id", effectiveTargetServer);
+            String payload = connectBody.toString();
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(endpoint))
@@ -5486,7 +5666,7 @@ public final class GuiManager {
                 HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
                 String body = response.body() == null ? "" : response.body();
                 if (response.statusCode() / 100 == 2 && jsonBooleanFieldIsTrue(body, "success")) {
-                    if (!effectiveTargetServer.equalsIgnoreCase(targetServer)) {
+                    if (instanceServerId == null && !effectiveTargetServer.equalsIgnoreCase(targetServer)) {
                         message = configuredMessageLine(
                             "connect.offline-fallback",
                             "&eZielserver &f%requested_server% &eist offline. Verbinde stattdessen zu &f%effective_server%&e ...",
@@ -5496,7 +5676,7 @@ public final class GuiManager {
                             effectiveTargetServer
                         );
                     } else {
-                        message = configuredMessageLine("connect.success", "&aDu wirst auf &f%server% &averbunden ...", "%server%", effectiveTargetServer);
+                        message = configuredMessageLine("connect.success", "&aDu wirst auf &f%server% &averbunden ...", "%server%", shownServer);
                     }
                 } else {
                     repository.upsertPendingWorldTransfer(player.getName(), null);

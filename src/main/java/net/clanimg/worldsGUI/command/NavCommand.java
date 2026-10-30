@@ -43,6 +43,15 @@ public final class NavCommand implements TabExecutor {
                 guiManager.executeNavSort(player, args.length >= 2 ? args[1] : "next");
                 return true;
             }
+            case "join-instance" -> {
+                // Klick im GUI "select-instance": Welt auf einem Template (z.B. lobby) auf einer bestimmten Instanz betreten.
+                if (args.length < 2) {
+                    guiManager.sendWithPrefix(player, "usage.nav.join-instance", "Usage: /nav join-instance <server-id>", "%label%", label);
+                    return true;
+                }
+                guiManager.executeJoinInstance(player, args[1]);
+                return true;
+            }
             case "server-selected" -> {
                 // Ziel der gemeinsamen Serverauswahl (select-server in guis.yml): Welt erstellen oder duplizieren.
                 if (args.length < 3) {

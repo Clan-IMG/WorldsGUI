@@ -657,6 +657,34 @@ guis:
             # generiert im Format <spieler>-<id>
             confirm-command: "nav server-selected %server-purpose% %selection:server%"
 
+  # Welt auf einem Template (z.B. "lobby"): Jede laufende Instanz (lobby-1, lobby-2, ...)
+  # hat dieselbe Welt. Öffnet sich beim Linksklick auf so eine Welt, wenn mehrere
+  # Instanzen laufen - der Spieler wählt, auf welche er geht.
+  select-instance:
+    gui-size: 27
+    title: "Server wählen"
+    position: bottom
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-range:
+        from: 0
+        to: 17
+        source: "world-instances" # laufende Instanzen laut SimpleCloud
+        material: "ENDER_PEARL"
+        title: "&f%instance_name% %instance_here%"
+        lore:
+          - "&7Welt: &f%instance-world%"
+          - "&7Spieler: &f%instance_players%&7/&f%instance_max_players%"
+          - ""
+          - "&7<Linksklick> &bBetreten"
+        action:
+          trigger: "command"
+          command: "nav join-instance %instance_id%"
+
   invited-worlds:
     gui-size: 54
     title: "Eingeladene Welten"

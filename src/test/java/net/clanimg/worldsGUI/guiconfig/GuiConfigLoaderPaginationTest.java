@@ -73,6 +73,17 @@ class GuiConfigLoaderPaginationTest {
             "a6c4a0110bd317371ad9c4e9b4f178456675f04b3dc2f41a8840cc2412816b81"), "Stand vom 30.10.2026 (Sortier-Item schloss das Menü)");
         assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
             "3df5cacfac74668c47c384811c029705e49df2181d8902b222e85cfd3be5ec05"), "Stand vom 30.10.2026 (Serverauswahl mit nur 6 Plätzen)");
+        assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
+            "7390369f463412c4d63fbbf0d186e64a3b7434a75bb68bbc923792e7bd7b8d5f"), "Stand vom 30.10.2026 (ohne Instanz-Auswahl für Template-Welten)");
+    }
+
+    @Test
+    void templateWorldsOfferAnInstanceSelection() throws Exception {
+        GuiConfig config = GuiConfigLoader.loadFromYaml(bundledYaml(), LOGGER);
+
+        GuiSlotRangeDefinition instances = config.get("select-instance").orElseThrow().slotRanges().get(0);
+        assertEquals("world-instances", instances.source());
+        assertEquals("nav join-instance %instance_id%", instances.action().anyClickTrigger().command());
     }
 
     private YamlConfiguration bundledYaml() throws Exception {

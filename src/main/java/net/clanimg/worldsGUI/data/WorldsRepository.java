@@ -710,6 +710,42 @@ public final class WorldsRepository {
         return serverNames;
     }
 
+    /** Server, auf dem WorldsGUI läuft bzw. gelaufen ist; online = gerade erreichbar (Heartbeat). */
+    public record KnownServer(String name, boolean online) {}
+
+    /**
+     * Alle Server, auf denen WorldsGUI in den letzten {@code maxAgeDays} Tagen lief - auch gerade ausgeschaltete.
+     * Leer, wenn die API nicht gefragt werden konnte (oder noch keinen /worlds/servers/known-Endpunkt hat).
+     */
+    public Optional<List<KnownServer>> listKnownServers(int maxAgeDays, int graceSeconds) {
+        try {
+            String path = "/worlds/servers/known?maxAgeDays=" + Math.max(1, maxAgeDays) + "&graceSeconds=" + Math.max(1, graceSeconds);
+            ApiResponse response = request("GET", path, null);
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("known-servers", "Server-Liste API Fehler: HTTP " + response.statusCode());
+                return Optional.empty();
+            }
+            JsonObject json = parseObject(response.body());
+            List<KnownServer> servers = new ArrayList<>();
+            if (json.has("servers") && json.get("servers").isJsonArray()) {
+                for (JsonElement element : json.getAsJsonArray("servers")) {
+                    if (!element.isJsonObject()) {
+                        continue;
+                    }
+                    JsonObject row = element.getAsJsonObject();
+                    String name = getString(row, "serverName", "");
+                    if (name != null && !name.isBlank()) {
+                        servers.add(new KnownServer(name.trim(), getBoolean(row, "online", false)));
+                    }
+                }
+            }
+            return Optional.of(servers);
+        } catch (Exception ex) {
+            warnThrottled("known-servers-ex", "Fehler beim Laden der Server-Liste via API: " + ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
     public List<JoinRequest> listPendingJoinRequests(int limit) {
         List<JoinRequest> requests = new ArrayList<>();
         try {

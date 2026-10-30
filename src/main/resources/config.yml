@@ -32,6 +32,11 @@ api:
   # Auf lobby-1 z.B. "lobby-1" setzen, auf build-1 entsprechend "build-1".
   local-server-name: ""
 
+  # Duplizieren auf beliebige Server (Permission worldsgui.command.nav.my-world.clone.any-server):
+  # zur Wahl stehen alle Server, auf denen WorldsGUI in so vielen Tagen zuletzt lief - auch
+  # ausgeschaltete. Auf einem ausgeschalteten Server entsteht die Kopie beim nächsten Start.
+  duplicate-server-max-age-days: 90
+
 luckperms:
   group-team: "team"
   group-kunde: "kunde"

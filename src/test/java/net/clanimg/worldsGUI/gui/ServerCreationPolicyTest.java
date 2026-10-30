@@ -1,6 +1,8 @@
 package net.clanimg.worldsGUI.gui;
 
 import java.util.List;
+import java.util.Optional;
+import net.clanimg.worldsGUI.data.WorldsRepository.KnownServer;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,5 +37,29 @@ class ServerCreationPolicyTest {
     void allowsIdentifiedBuildServerAndUnrestrictedHostnameFallback() {
         assertTrue(ServerCreationPolicy.allowsLocalCreation("build-1", "build-1", BLOCKED));
         assertTrue(ServerCreationPolicy.allowsLocalCreation("container-abc", "", List.of()));
+    }
+
+    @Test
+    void duplicateTargetsIncludeOfflineServersWithWorldsGuiAndMergeCase() {
+        List<KnownServer> known = List.of(
+            new KnownServer("redstone", false),
+            new KnownServer("Build", false),
+            new KnownServer("lobby", true),
+            new KnownServer("build-26-1", false));
+
+        List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(Optional.of(known), List.of(), "build");
+
+        assertEquals(List.of(
+            new KnownServer("build", true),
+            new KnownServer("build-26-1", false),
+            new KnownServer("lobby", true),
+            new KnownServer("redstone", false)), targets);
+    }
+
+    @Test
+    void duplicateTargetsFallBackToOnlineServersWhenTheApiHasNoServerList() {
+        List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(Optional.empty(), List.of("dev", "lobby"), "");
+
+        assertEquals(List.of(new KnownServer("dev", true), new KnownServer("lobby", true)), targets);
     }
 }
