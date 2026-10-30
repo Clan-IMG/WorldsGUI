@@ -1147,6 +1147,13 @@ public final class GuiManager {
             return;
         }
         String worldName = entry.worldName();
+        if (Files.exists(Bukkit.getWorldContainer().toPath().resolve(worldName).resolve("level.dat"))) {
+            // Die Welt gibt es hier schon, sie ist nur nicht geladen (z.B. idle-unload, nach einem Neustart noch
+            // niemand drin) - geladen wird sie beim Betreten. Nicht neu erstellen und vor allem die Metadaten
+            // (Anzeigename, Icon, Nummer) nicht mit Standardwerten überschreiben.
+            metadataWorldCreationsInProgress.remove(worldName.toLowerCase(Locale.ROOT));
+            return;
+        }
         generationDebug.request("METADATA_CREATE", worldName, "FLAT_FORCED_BY_METADATA",
             entry.serverName(), resolveLocalServerId(), true);
         String worldKey = worldName.toLowerCase(Locale.ROOT);
@@ -1188,21 +1195,26 @@ public final class GuiManager {
 
                 runEntityCleanup(world);
 
-                persistWorldMetadataWithRetry(
-                    UUID.fromString(ownerUuid),
-                    ownerName,
-                    worldName,
-                    entry.orderLabel(),
-                    entry.ticketOrderId(),
-                    entry.sourceType(),
-                    customers,
-                    worldIndex,
-                    entry.isPublic(),
-                    3,
-                    false,
-                    false,
-                    entry.serverName()
-                );
+                // Nur Ticket-Welten: Kunden aus dem Auftrag nachtragen. Der Eintrag existiert bereits - bei privaten
+                // Welten (z.B. Duplikat "... Copy", auf einem anderen Server erstellt) würde das Anzeigename und Icon
+                // mit Standardwerten überschreiben.
+                if (isTicketWorld(entry)) {
+                    persistWorldMetadataWithRetry(
+                        UUID.fromString(ownerUuid),
+                        ownerName,
+                        worldName,
+                        entry.orderLabel(),
+                        entry.ticketOrderId(),
+                        entry.sourceType(),
+                        customers,
+                        worldIndex,
+                        entry.isPublic(),
+                        3,
+                        false,
+                        false,
+                        entry.serverName()
+                    );
+                }
                 metadataWorldCreationsInProgress.remove(worldKey);
             }
         }.runTaskLater(plugin, 20L);
@@ -4923,7 +4935,19 @@ public final class GuiManager {
 
         @Override
         public void applyNewWorldDefaults(String worldName) {
-            runPostCreateCommands(Bukkit.getWorld(worldName));
+            // Die Flags brauchen die Region: erst Schutz anlegen (dafür Besitzer/Eingeladene aus der API), dann Standards.
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    World world = Bukkit.getWorld(worldName);
+                    if (world == null) {
+                        return;
+                    }
+                    entry.ifPresent(found -> applyWorldGuardProtection(world, found.ownerUuid(), found.ownerName(),
+                        found.invitedPlayers(), found.trustedPlayers()));
+                    runPostCreateCommands(world);
+                });
+            });
         }
 
         @Override
