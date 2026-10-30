@@ -26,6 +26,16 @@ class ServerCreationPolicyTest {
     }
 
     @Test
+    void aGroupNameBlocksAllItsInstances() {
+        List<String> blocked = List.of("lobby", "plotwelt");
+        assertTrue(ServerCreationPolicy.isBlocked("lobby-2", blocked));
+        assertTrue(ServerCreationPolicy.isBlocked("lobby", blocked));
+        assertFalse(ServerCreationPolicy.allowsLocalCreation("lobby-1", "lobby-1", blocked));
+        assertFalse(ServerCreationPolicy.isBlocked("build", blocked));
+        assertFalse(ServerCreationPolicy.isBlocked("build-26-1", blocked));
+    }
+
+    @Test
     void unidentifiedContainerCannotBypassBlacklist() {
         assertFalse(ServerCreationPolicy.allowsLocalCreation("container-abc", "", BLOCKED));
         assertFalse(ServerCreationPolicy.allowsLocalCreation("", "", BLOCKED));

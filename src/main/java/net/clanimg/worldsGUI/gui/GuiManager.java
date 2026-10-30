@@ -4910,6 +4910,11 @@ public final class GuiManager {
         }
 
         @Override
+        public void applyNewWorldDefaults(String worldName) {
+            runPostCreateCommands(Bukkit.getWorld(worldName));
+        }
+
+        @Override
         public void notifyJobResult(Player player, BackupJob job) {
             String worldName = job.worldName();
             if (job.isClonePart()) {
@@ -5230,7 +5235,9 @@ public final class GuiManager {
         if (localServer == null || localServer.isBlank()) {
             return false;
         }
-        return isSameServerIdentifier(worldServer, localServer);
+        // Welten auf einem Template (z.B. "lobby") liegen auf jeder seiner Instanzen.
+        return isSameServerIdentifier(worldServer, localServer)
+            || (localNumericalId() >= 0 && isSameServerIdentifier(worldServer, System.getenv("SIMPLECLOUD_GROUP")));
     }
 
     private boolean isSameServerIdentifier(String left, String right) {
@@ -5299,6 +5306,13 @@ public final class GuiManager {
             if (value != null && !value.isBlank()) {
                 return value.trim();
             }
+        }
+        // SimpleCloud v3: Instanzen eines Templates heißen <Gruppe>-<Nummer> (lobby-1, lobby-2),
+        // persistente Server haben die Nummer -1 und heißen wie ihre Gruppe.
+        String group = System.getenv("SIMPLECLOUD_GROUP");
+        if (group != null && !group.isBlank()) {
+            int number = localNumericalId();
+            return number >= 0 ? group.trim() + "-" + number : group.trim();
         }
         return "";
     }
@@ -5369,7 +5383,7 @@ public final class GuiManager {
         String localServer = resolveLocalServerId();
         List<String> blockedServers = resolveConfiguredBlockedServerNames();
         boolean localBlocked = !localServer.isBlank()
-            && blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, localServer));
+            && ServerCreationPolicy.isBlocked(localServer, blockedServers);
 
         List<String> selectableServers = resolveSelectableServerNames();
         if (selectableServers.isEmpty()) {
@@ -5441,7 +5455,7 @@ public final class GuiManager {
         String localServer = resolveLocalServerId();
 
         boolean localBlocked = !localServer.isBlank()
-            && blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, localServer));
+            && ServerCreationPolicy.isBlocked(localServer, blockedServers);
 
         List<String> apiOnline = repository.listOnlineServerNames(20);
         if (!apiOnline.isEmpty()) {
@@ -5459,7 +5473,7 @@ public final class GuiManager {
 
             List<String> visible = new ArrayList<>();
             for (String online : allOnline) {
-                boolean blocked = blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, online));
+                boolean blocked = ServerCreationPolicy.isBlocked(online, blockedServers);
                 if (!blocked) {
                     visible.add(online);
                 }
@@ -5486,7 +5500,7 @@ public final class GuiManager {
 
             List<String> visible = new ArrayList<>();
             for (String online : allOnline) {
-                boolean blocked = blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, online));
+                boolean blocked = ServerCreationPolicy.isBlocked(online, blockedServers);
                 if (!blocked) {
                     visible.add(online);
                 }
@@ -5505,7 +5519,7 @@ public final class GuiManager {
             return List.of();
         }
 
-        boolean localBlocked = blockedServers.stream().anyMatch(blockedId -> isSameServerIdentifier(blockedId, local));
+        boolean localBlocked = ServerCreationPolicy.isBlocked(local, blockedServers);
         return localBlocked ? List.of() : List.of(local);
     }
 

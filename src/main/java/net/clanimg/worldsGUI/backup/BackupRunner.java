@@ -279,7 +279,7 @@ final class BackupRunner {
         Optional<State> state = states.read(world);
         if (state.isPresent() && state.get().jobId() == job.id() && state.get().phase() == Phase.DONE) {
             // Der Tausch ist in einem früheren Versuch schon passiert (z.B. Neustart kurz vor Ende).
-            return finishRestore(ctx, world);
+            return finishRestore(ctx, world, job.cloneSource() != null);
         }
 
         // Reste eines früheren, unterbrochenen Restores in einen konsistenten Zustand bringen.
@@ -334,7 +334,7 @@ final class BackupRunner {
             moveDirectoryOrFail(tmp, folder);
             writeState(world, job.id(), Phase.DONE);
 
-            return finishRestore(ctx, world);
+            return finishRestore(ctx, world, clone);
         } catch (RuntimeException ex) {
             restoreConsistencyAfterFailure(world);
             throw ex;
@@ -355,7 +355,8 @@ final class BackupRunner {
         return false;
     }
 
-    private String finishRestore(JobContext ctx, String world) {
+    /** @param clone Duplikat: danach die Welt-Standards einer neuen Welt setzen */
+    private String finishRestore(JobContext ctx, String world, boolean clone) {
         Path folder = worldFolder(world);
         Path old = previousFolder(world);
 
@@ -366,6 +367,9 @@ final class BackupRunner {
         }
 
         runOnMainThread(() -> hooks.refreshWorldProtection(world));
+        if (clone) {
+            runOnMainThread(() -> hooks.applyNewWorldDefaults(world));
+        }
         states.clear(world);
         if (Files.exists(old) && !deleteRecursive(old)) {
             logger.warning("Der vorherige Weltstand konnte nicht gelöscht werden: " + old);

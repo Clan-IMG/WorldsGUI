@@ -30,6 +30,13 @@ public interface BackupWorldHooks {
     /** Setzt den Weltschutz (WorldGuard) nach einem Restore neu. */
     void refreshWorldProtection(String worldName);
 
+    /**
+     * Nach dem Einspielen eines Duplikats auf einem anderen Server: Welt-Standards wie bei einer neu erstellten Welt
+     * setzen (WorldGuard-Flags aus world-defaults.yml, z.B. leaf-decay, Gamerules, post-create-commands). WorldGuard
+     * speichert Regionen pro Server, sie kommen mit dem Weltordner nicht mit.
+     */
+    void applyNewWorldDefaults(String worldName);
+
     /** Informiert den anfragenden Spieler über das Ergebnis seines Auftrags (Spieler ist online). */
     void notifyJobResult(Player player, BackupJob job);
 }

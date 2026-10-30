@@ -15,8 +15,14 @@ final class ServerCreationPolicy {
             && left.trim().equalsIgnoreCase(right.trim());
     }
 
+    /** Gesperrt ist ein Server, wenn er selbst oder seine Gruppe in der Liste steht ("lobby" sperrt lobby-1, lobby-2, ...). */
     static boolean isBlocked(String server, List<String> blockedServers) {
-        return blockedServers.stream().anyMatch(blocked -> sameServer(blocked, server));
+        return blockedServers.stream().anyMatch(blocked -> sameServer(blocked, server) || sameServer(blocked, instanceGroup(server)));
+    }
+
+    /** Gruppe einer Template-Instanz: lobby-2 -> lobby; Namen ohne laufende Nummer bleiben gleich. */
+    static String instanceGroup(String server) {
+        return server == null ? null : server.trim().replaceFirst("-\\d+$", "");
     }
 
     /**

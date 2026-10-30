@@ -14,8 +14,9 @@ api:
 
   # Auf diesen Servern erstellt WorldsGUI keine Welten (auch keine Auto-/Ticket-Welten).
   # Sie sind als Erstellungsziel nicht auswählbar; /nav und die Erstellung auf anderen
-  # erlaubten Servern bleiben verfügbar. Namen werden exakt verglichen (ohne Beachtung
-  # der Groß-/Kleinschreibung): lobby-1 und lobby-2 sind unterschiedliche Server.
+  # erlaubten Servern bleiben verfügbar. Namen werden ohne Beachtung der Groß-/Klein-
+  # schreibung verglichen; ein Gruppenname sperrt auch alle Instanzen ("lobby" sperrt
+  # lobby-1, lobby-2, ...), eine einzelne Instanz ("lobby-1") nur diese.
   blocked-server-names:
     - "lobby"
     - "plotwelt"
@@ -29,7 +30,9 @@ api:
   # von den Server-IDs aus SimpleCloud abweicht.
   # Bei gesetzter Sperrliste ist ein eindeutiger Name aus dieser Einstellung oder
   # der Cloud-Umgebung erforderlich. Ohne ihn ist lokale Erstellung deaktiviert.
-  # Auf lobby-1 z.B. "lobby-1" setzen, auf build-1 entsprechend "build-1".
+  # Leer = aus SimpleCloud (SIMPLECLOUD_GROUP + SIMPLECLOUD_NUMERICAL_ID): persistente
+  # Server heißen wie ihre Gruppe (build), Template-Instanzen <Gruppe>-<Nummer> (lobby-1).
+  # Für Templates mit mehreren Instanzen (z.B. lobby) daher leer lassen.
   local-server-name: ""
 
   # Duplizieren auf beliebige Server (Permission worldsgui.command.nav.my-world.clone.any-server):
