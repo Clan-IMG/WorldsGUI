@@ -22,6 +22,7 @@ import java.util.stream.Stream;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.net.InetAddress;
@@ -50,6 +51,7 @@ import net.clanimg.worldsGUI.WorldsGUI;
 import net.clanimg.worldsGUI.backup.BackupFormat;
 import net.clanimg.worldsGUI.backup.BackupService;
 import net.clanimg.worldsGUI.backup.BackupWorldHooks;
+import net.clanimg.worldsGUI.backup.WorldFolders;
 import net.clanimg.worldsGUI.data.WorldsRepository;
 import net.clanimg.worldsGUI.diagnostics.WorldGenerationDebug;
 import net.clanimg.worldsGUI.data.WorldsRepository.BackupApiResult;
@@ -169,6 +171,8 @@ public final class GuiManager {
     private final Map<UUID, PendingDeleteConfirmation> pendingDeleteByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, String> lastAppliedLuckPermsState = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
+    private final AtomicBoolean templateSyncRunning = new AtomicBoolean();
+    private boolean warnedMissingTemplateDir;
     /** Offene Auswahl im GUI "select-instance": welche Welt, welche Instanzen standen zur Wahl. */
     private final Map<UUID, InstanceChoice> instanceChoices = new ConcurrentHashMap<>();
 
@@ -553,8 +557,9 @@ public final class GuiManager {
             List<Map<String, String>> items = new ArrayList<>();
             if ("duplicate".equalsIgnoreCase(session.guiParam("server-purpose"))) {
                 for (KnownServer server : resolveDuplicateTargets(player)) {
-                    items.add(Map.of("server_id", server.name(),
-                        "server_name", server.online() ? server.name() : server.name() + " &8(offline)"));
+                    String label = server.isTemplate() ? server.name() + " &7(alle Instanzen)"
+                        : server.online() ? server.name() : server.name() + " &8(offline)";
+                    items.add(Map.of("server_id", server.name(), "server_name", label));
                 }
                 return applySlotRangeFilter(items, filter);
             }
@@ -2276,7 +2281,9 @@ public final class GuiManager {
             int maxAgeDays = Math.max(1, plugin.getConfig().getInt("api.duplicate-server-max-age-days", 90));
             Optional<List<KnownServer>> known = repository.listKnownServers(maxAgeDays, 20);
             List<String> online = known.isPresent() ? List.of() : repository.listOnlineServerNames(20);
-            List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(known, online, resolveExplicitLocalServerId());
+            // Eine Template-Instanz (lobby-1) ist kein sinnvolles Ziel: dort wäre die Welt beim nächsten Neustart weg.
+            String local = localTemplateGroup() == null ? resolveExplicitLocalServerId() : "";
+            List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(known, online, local);
             if (!targets.isEmpty()) {
                 return targets;
             }
@@ -4290,8 +4297,8 @@ public final class GuiManager {
         if (notify) {
             send(player, "join-success", "%world%", worldName);
         }
-        if ("private".equals(entry.sourceType())) {
-            // einem einzelnen Besitzer gehörende Welt - für idle-unload vormerken
+        if ("private".equals(entry.sourceType()) && !isLocalTemplateWorld(entry)) {
+            // einem einzelnen Besitzer gehörende Welt - für idle-unload vormerken (Template-Welten wie die Lobby nie)
             idleWorldUnloader.trackPrivateWorld(worldName);
         }
         return true;
@@ -4889,19 +4896,24 @@ public final class GuiManager {
 
         @Override
         public boolean loadWorld(String worldName) {
-            if (Bukkit.getWorld(worldName) != null) {
-                return true;
+            return loadOrImportWorld(worldName);
+        }
+
+        @Override
+        public String localServerGroup() {
+            return localTemplateGroup();
+        }
+
+        @Override
+        public Optional<Path> templateWorldFolder(String worldName) {
+            if (localTemplateGroup() == null) {
+                return Optional.empty();
             }
-            Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
-            if (mvCore != null && mvCore.isEnabled()) {
-                generationDebug.dispatchCommand("BackupHooks.loadWorld@GuiManager:4257", Bukkit.getConsoleSender(), "mv load " + worldName);
-                if (Bukkit.getWorld(worldName) == null) {
-                    // Neue Welt (z. B. Duplikat von einem anderen Server): Multiverse kennt sie noch nicht.
-                    generationDebug.dispatchCommand("BackupHooks.loadWorld.import@GuiManager", Bukkit.getConsoleSender(),
-                        "mv import " + worldName + " normal");
-                }
+            Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+            if (entry.isEmpty() || !isLocalTemplateWorld(entry.get())) {
+                return Optional.empty();
             }
-            return Bukkit.getWorld(worldName) != null;
+            return localGroupTemplateDir().map(dir -> dir.resolve(worldName));
         }
 
         @Override
@@ -5191,6 +5203,145 @@ public final class GuiManager {
         }
     }
 
+    // ------------------------------------------------------------------ Welten im Template (z.B. Lobby): auf jeder Instanz
+
+    /** Template-Gruppe dieser Instanz (lobby für lobby-1), null bei persistenten Servern. */
+    public String localTemplateGroup() {
+        String group = System.getenv("SIMPLECLOUD_GROUP");
+        return localNumericalId() >= 0 && group != null && !group.isBlank() ? group.trim() : null;
+    }
+
+    /** Welt gehört zur Template-Gruppe dieser Instanz (Server "lobby" in der Welten-Tabelle). */
+    private boolean isLocalTemplateWorld(WorldEntry entry) {
+        String group = localTemplateGroup();
+        return group != null && entry != null && isSameServerIdentifier(entry.serverName(), group);
+    }
+
+    /**
+     * templates/&lt;gruppe&gt; dieser Instanz: {@code simplecloud.templates-dir} oder - Standard bei SimpleCloud, wo
+     * Instanzen unter &lt;cloud&gt;/running/&lt;gruppe&gt;/&lt;instanz&gt; laufen - &lt;cloud&gt;/templates.
+     */
+    private Optional<Path> localGroupTemplateDir() {
+        String group = localTemplateGroup();
+        if (group == null) {
+            return Optional.empty();
+        }
+        String configured = plugin.getConfig().getString("simplecloud.templates-dir", "");
+        Path root;
+        if (configured != null && !configured.isBlank()) {
+            root = Path.of(configured.trim());
+        } else {
+            Path serverDir = Bukkit.getWorldContainer().getAbsoluteFile().toPath().normalize();
+            Path cloudDir = serverDir.getParent() == null || serverDir.getParent().getParent() == null
+                ? null : serverDir.getParent().getParent().getParent();
+            if (cloudDir == null) {
+                return Optional.empty();
+            }
+            root = cloudDir.resolve("templates");
+        }
+        Path dir = root.resolve(group);
+        if (!Files.isDirectory(dir)) {
+            if (!warnedMissingTemplateDir) {
+                warnedMissingTemplateDir = true;
+                plugin.getLogger().warning("Template-Ordner " + dir + " nicht gefunden - Welten der Gruppe " + group
+                    + " landen nicht im Template (simplecloud.templates-dir setzen).");
+            }
+            return Optional.empty();
+        }
+        return Optional.of(dir);
+    }
+
+    /**
+     * Instanz eines Templates (z.B. lobby-1): Welten der Gruppe (Server "lobby" in der Welten-Tabelle) laden, die hier
+     * noch fehlen - beim Start und danach regelmäßig. Fehlt der Ordner, kommt er aus dem Template (eine andere Instanz
+     * hat z.B. ein Duplikat dorthin geschrieben). WorldGuard-Regionen liegen pro Server, daher danach Schutz und
+     * Welt-Standards (leaf-decay usw.). Beim Start ({@code blocking}) direkt auf dem Hauptthread, damit die Welt steht,
+     * bevor die ersten Spieler kommen (z.B. Spawn von AdvancedTeleport dort).
+     */
+    public void syncTemplateWorlds(boolean blocking) {
+        String group = localTemplateGroup();
+        if (group == null || !templateSyncRunning.compareAndSet(false, true)) {
+            return;
+        }
+        if (blocking) {
+            try {
+                prepareTemplateWorlds(group).forEach(this::loadTemplateWorld);
+            } finally {
+                templateSyncRunning.set(false);
+            }
+            return;
+        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<WorldEntry> ready = prepareTemplateWorlds(group);
+                if (!ready.isEmpty() && plugin.isEnabled()) {
+                    Bukkit.getScheduler().runTask(plugin, () -> ready.forEach(this::loadTemplateWorld));
+                }
+            } finally {
+                templateSyncRunning.set(false);
+            }
+        });
+    }
+
+    /** Holt fehlende Ordner aus dem Template; liefert die Welten, deren Ordner jetzt hier liegt. */
+    private List<WorldEntry> prepareTemplateWorlds(String group) {
+        Optional<Path> templateDir = localGroupTemplateDir();
+        Path serverDir = Bukkit.getWorldContainer().getAbsoluteFile().toPath().normalize();
+        List<WorldEntry> ready = new ArrayList<>();
+        for (WorldEntry entry : repository.listServerWorlds(group)) {
+            String name = entry.worldName();
+            if (entry.isArchived() || backupService.isWorldBusy(name)) {
+                continue;
+            }
+            Path local = serverDir.resolve(name);
+            if (!Files.exists(local.resolve("level.dat"))) {
+                Optional<Path> source = templateDir.map(dir -> dir.resolve(name)).filter(dir -> Files.exists(dir.resolve("level.dat")));
+                if (source.isEmpty()) {
+                    continue;
+                }
+                try {
+                    WorldFolders.replaceWithCopy(source.get(), local);
+                } catch (IOException ex) {
+                    plugin.getLogger().warning("Template-Welt " + name + " konnte nicht aus " + source.get() + " kopiert werden: " + ex.getMessage());
+                    continue;
+                }
+            }
+            ready.add(entry);
+        }
+        return ready;
+    }
+
+    private void loadTemplateWorld(WorldEntry entry) {
+        String name = entry.worldName();
+        if (Bukkit.getWorld(name) != null || backupService.isWorldBusy(name)) {
+            return;
+        }
+        if (!loadOrImportWorld(name)) {
+            plugin.getLogger().warning("Template-Welt " + name + " konnte nicht geladen werden.");
+            return;
+        }
+        World world = Bukkit.getWorld(name);
+        applyWorldGuardProtection(world, entry.ownerUuid(), entry.ownerName(), entry.invitedPlayers(), entry.trustedPlayers());
+        runPostCreateCommands(world);
+        plugin.getLogger().info("Template-Welt " + name + " geladen.");
+    }
+
+    /** Lädt eine Welt per Multiverse; kennt Multiverse sie noch nicht (Duplikat, Welt aus dem Template), wird sie importiert. */
+    private boolean loadOrImportWorld(String worldName) {
+        if (Bukkit.getWorld(worldName) != null) {
+            return true;
+        }
+        Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
+        if (mvCore != null && mvCore.isEnabled()) {
+            generationDebug.dispatchCommand("loadOrImportWorld.load@GuiManager", Bukkit.getConsoleSender(), "mv load " + worldName);
+            if (Bukkit.getWorld(worldName) == null) {
+                generationDebug.dispatchCommand("loadOrImportWorld.import@GuiManager", Bukkit.getConsoleSender(),
+                    "mv import " + worldName + " normal");
+            }
+        }
+        return Bukkit.getWorld(worldName) != null;
+    }
+
     private boolean joinWorldLocally(Player player, WorldEntry entry, boolean notify) {
         String worldName = entry.worldName();
         if (backupService.isWorldBusy(worldName)) {
@@ -5218,9 +5369,9 @@ public final class GuiManager {
         if (notify) {
             send(player, "join-success", "%world%", worldName);
         }
-        if ("private".equals(entry.sourceType())) {
+        if ("private".equals(entry.sourceType()) && !isLocalTemplateWorld(entry)) {
             // einem einzelnen Besitzer gehörende Welt, z.B. erneut betreten über /nav - für
-            // idle-unload vormerken (öffentliche/Ticket-Welten mit mehreren Kunden nie)
+            // idle-unload vormerken (öffentliche/Ticket-Welten mit mehreren Kunden und Template-Welten nie)
             idleWorldUnloader.trackPrivateWorld(worldName);
         }
         return true;

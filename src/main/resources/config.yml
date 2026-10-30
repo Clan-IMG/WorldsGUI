@@ -53,6 +53,10 @@ simplecloud:
   network-id: "{{ env.SC_NETWORK_ID }}"
   network-secret: "{{ secrets.SC_NETWORK_SECRET }}"
   lobby-server-id: "lobby-1"
+  # Ordner der SimpleCloud-Templates. Leer = automatisch (<cloud>/templates, da Instanzen unter
+  # <cloud>/running/<gruppe>/<instanz> laufen). Welten auf einem Template (z.B. Server "lobby" beim
+  # Duplizieren) werden dorthin geschrieben und von jeder Instanz beim Start geladen.
+  templates-dir: ""
 
 backup:
   # Welt-Backups über Cloudflare R2, verwaltet von der worldsgui-api.

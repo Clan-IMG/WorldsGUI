@@ -333,6 +333,7 @@ final class BackupRunner {
             }
             moveDirectoryOrFail(tmp, folder);
             writeState(world, job.id(), Phase.DONE);
+            publishToTemplate(world, folder);
 
             return finishRestore(ctx, world, clone);
         } catch (RuntimeException ex) {
@@ -596,6 +597,23 @@ final class BackupRunner {
             moveDirectory(source, target);
         } catch (IOException ex) {
             throw new BackupException("Weltordner konnte nicht getauscht werden: " + ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Welt der eigenen Template-Gruppe (z.B. lobby): zusätzlich ins Template schreiben, damit jede - auch künftige -
+     * Instanz sie hat. Geschieht vor dem Laden, die Dateien sind also noch genau der Stand aus dem Backup.
+     */
+    private void publishToTemplate(String world, Path folder) {
+        Optional<Path> target = hooks.templateWorldFolder(world);
+        if (target.isEmpty()) {
+            return;
+        }
+        try {
+            WorldFolders.replaceWithCopy(folder, target.get());
+            logger.info("Welt " + world + " ins Template übernommen: " + target.get());
+        } catch (IOException ex) {
+            logger.warning("Welt " + world + " konnte nicht ins Template kopiert werden (" + target.get() + "): " + ex.getMessage());
         }
     }
 

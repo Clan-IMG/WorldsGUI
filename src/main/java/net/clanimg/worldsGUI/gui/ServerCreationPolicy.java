@@ -28,12 +28,15 @@ final class ServerCreationPolicy {
     /**
      * Zielserver fürs Duplizieren auf beliebige Server: jeder Server, auf dem WorldsGUI läuft oder lief ({@code known}),
      * dazu die gerade erreichbaren ({@code online}, nur nötig, wenn {@code known} fehlt) und dieser Server selbst.
-     * Groß-/Kleinschreibung wird zusammengefasst, "online" gewinnt; sortiert nach Name.
+     * Instanzen eines Templates (lobby-1, lobby-2) erscheinen als ihre Gruppe (lobby): Eine Welt dort kommt ins
+     * Template und damit auf jede Instanz. Groß-/Kleinschreibung wird zusammengefasst, "online" gewinnt; nach Name sortiert.
      */
     static List<KnownServer> duplicateTargets(Optional<List<KnownServer>> known, List<String> online, String explicitLocal) {
         Map<String, KnownServer> byName = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         for (KnownServer server : known.orElse(List.of())) {
-            byName.merge(server.name(), server, (existing, other) -> existing.online() ? existing : other);
+            KnownServer target = server.group() == null ? server : new KnownServer(server.group(), server.online(), server.group());
+            byName.merge(target.name(), target, (existing, other) -> new KnownServer(existing.name(),
+                existing.online() || other.online(), existing.group() != null ? existing.group() : other.group()));
         }
         for (String name : online) {
             if (name != null && !name.isBlank()) {
@@ -41,7 +44,8 @@ final class ServerCreationPolicy {
             }
         }
         if (explicitLocal != null && !explicitLocal.isBlank()) {
-            byName.put(explicitLocal.trim(), new KnownServer(explicitLocal.trim(), true));
+            KnownServer existing = byName.remove(explicitLocal.trim());
+            byName.put(explicitLocal.trim(), new KnownServer(explicitLocal.trim(), true, existing == null ? null : existing.group()));
         }
         return List.copyOf(byName.values());
     }

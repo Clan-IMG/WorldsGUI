@@ -34,12 +34,14 @@ public final class WorldsGUI extends JavaPlugin {
     private static final int SERVER_HEARTBEAT_INTERVAL_SECONDS = 10;
     private static final long TICKET_SYNC_INITIAL_DELAY_TICKS = 20L * 2L;
     private static final long TICKET_SYNC_INTERVAL_TICKS = 20L * 2L;
+    private static final long TEMPLATE_SYNC_INTERVAL_TICKS = 20L * 30L;
 
     private WorldsRepository repository;
     private GuiManager guiManager;
     private BukkitTask joinRequestTask;
     private BukkitTask presenceRefreshTask;
     private BukkitTask ticketSyncTask;
+    private BukkitTask templateSyncTask;
     private BukkitTask roleSyncTask;
     private BukkitTask serverHeartbeatTask;
     private BukkitTask idleUnloadTask;
@@ -108,6 +110,11 @@ public final class WorldsGUI extends JavaPlugin {
         joinRequestTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::processJoinRequests, 40L, 40L);
         presenceRefreshTask = Bukkit.getScheduler().runTaskTimer(this, this::refreshOnlinePresence, 20L, 20L * 20L);
         ticketSyncTask = Bukkit.getScheduler().runTaskTimer(this, this::syncTicketWorlds, TICKET_SYNC_INITIAL_DELAY_TICKS, TICKET_SYNC_INTERVAL_TICKS);
+        // Instanz eines Templates (z.B. lobby-1): Welten der Gruppe laden - im ersten Tick (dann ist auch Multiverse
+        // bereit) direkt, danach regelmäßig für Welten, die eine andere Instanz ins Template geschrieben hat.
+        Bukkit.getScheduler().runTask(this, () -> guiManager.syncTemplateWorlds(true));
+        templateSyncTask = Bukkit.getScheduler().runTaskTimer(this, () -> guiManager.syncTemplateWorlds(false),
+            TEMPLATE_SYNC_INTERVAL_TICKS, TEMPLATE_SYNC_INTERVAL_TICKS);
         int roleSyncSeconds = Math.max(15, getConfig().getInt("luckperms.sync-interval-seconds", 30));
         roleSyncTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
             this,
@@ -253,6 +260,10 @@ public final class WorldsGUI extends JavaPlugin {
             ticketSyncTask.cancel();
             ticketSyncTask = null;
         }
+        if (templateSyncTask != null) {
+            templateSyncTask.cancel();
+            templateSyncTask = null;
+        }
         if (roleSyncTask != null) {
             roleSyncTask.cancel();
             roleSyncTask = null;
@@ -355,7 +366,7 @@ public final class WorldsGUI extends JavaPlugin {
         }
 
         String status = online ? "bin da" : "offline";
-        repository.upsertServerPresence(localServer, online, status, SERVER_HEARTBEAT_INTERVAL_SECONDS);
+        repository.upsertServerPresence(localServer, online, status, SERVER_HEARTBEAT_INTERVAL_SECONDS, guiManager.localTemplateGroup());
     }
 
     private void disablePluginWithReason(String reason) {

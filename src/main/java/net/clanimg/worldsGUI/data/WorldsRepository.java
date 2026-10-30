@@ -659,6 +659,11 @@ public final class WorldsRepository {
     }
 
     public void upsertServerPresence(String serverName, boolean online, String status, int heartbeatIntervalSeconds) {
+        upsertServerPresence(serverName, online, status, heartbeatIntervalSeconds, null);
+    }
+
+    /** @param serverGroup Template-Gruppe, wenn dieser Server eine Instanz davon ist (lobby für lobby-1), sonst null */
+    public void upsertServerPresence(String serverName, boolean online, String status, int heartbeatIntervalSeconds, String serverGroup) {
         String normalizedServer = serverName == null ? "" : serverName.trim();
         if (normalizedServer.isBlank()) {
             return;
@@ -669,6 +674,9 @@ public final class WorldsRepository {
         body.addProperty("online", online);
         body.addProperty("status", status == null ? "" : status);
         body.addProperty("heartbeatIntervalSeconds", Math.max(1, heartbeatIntervalSeconds));
+        if (serverGroup != null && !serverGroup.isBlank()) {
+            body.addProperty("serverGroup", serverGroup.trim());
+        }
 
         try {
             ApiResponse response = request("PUT", "/worlds/server-presence", gson.toJson(body));
@@ -710,8 +718,20 @@ public final class WorldsRepository {
         return serverNames;
     }
 
-    /** Server, auf dem WorldsGUI läuft bzw. gelaufen ist; online = gerade erreichbar (Heartbeat). */
-    public record KnownServer(String name, boolean online) {}
+    /**
+     * Server, auf dem WorldsGUI läuft bzw. gelaufen ist; online = gerade erreichbar (Heartbeat).
+     * group = Template-Gruppe bei Instanzen (lobby für lobby-1), sonst null.
+     */
+    public record KnownServer(String name, boolean online, String group) {
+        public KnownServer(String name, boolean online) {
+            this(name, online, null);
+        }
+
+        /** Eintrag steht für ein ganzes Template (alle Instanzen), nicht für einen einzelnen Server. */
+        public boolean isTemplate() {
+            return group != null && group.equalsIgnoreCase(name);
+        }
+    }
 
     /**
      * Alle Server, auf denen WorldsGUI in den letzten {@code maxAgeDays} Tagen lief - auch gerade ausgeschaltete.
@@ -735,7 +755,9 @@ public final class WorldsRepository {
                     JsonObject row = element.getAsJsonObject();
                     String name = getString(row, "serverName", "");
                     if (name != null && !name.isBlank()) {
-                        servers.add(new KnownServer(name.trim(), getBoolean(row, "online", false)));
+                        String group = getNullableString(row, "serverGroup");
+                        servers.add(new KnownServer(name.trim(), getBoolean(row, "online", false),
+                            group == null || group.isBlank() ? null : group.trim()));
                     }
                 }
             }
@@ -858,9 +880,13 @@ public final class WorldsRepository {
         return backupCall("DELETE", "/world-backups/items/" + backupId + "?worldName=" + encode(worldName), null);
     }
 
-    public List<BackupJob> claimBackupJobs(String serverName, int limit) {
+    /** @param serverGroup Template-Gruppe dieser Instanz (holt auch Aufträge für Welten der Gruppe ab) oder null */
+    public List<BackupJob> claimBackupJobs(String serverName, String serverGroup, int limit) {
         JsonObject body = new JsonObject();
         body.addProperty("serverName", serverName);
+        if (serverGroup != null && !serverGroup.isBlank()) {
+            body.addProperty("serverGroup", serverGroup.trim());
+        }
         body.addProperty("limit", Math.max(1, limit));
         return backupJobList(backupCall("POST", "/world-backups/jobs/claim", body), "claim");
     }

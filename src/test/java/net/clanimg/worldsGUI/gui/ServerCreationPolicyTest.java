@@ -67,6 +67,23 @@ class ServerCreationPolicyTest {
     }
 
     @Test
+    void templateInstancesAppearAsTheirGroup() {
+        List<KnownServer> known = List.of(
+            new KnownServer("lobby-1", false, "lobby"),
+            new KnownServer("lobby-2", true, "lobby"),
+            new KnownServer("lobby", false),           // alter Eintrag von früher, als beide Instanzen "lobby" hießen
+            new KnownServer("build-26-1", false));      // persistenter Server, keine Instanz
+
+        List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(Optional.of(known), List.of(), "build");
+
+        assertEquals(List.of(
+            new KnownServer("build", true),
+            new KnownServer("build-26-1", false),
+            new KnownServer("lobby", true, "lobby")), targets);
+        assertTrue(targets.get(2).isTemplate());
+    }
+
+    @Test
     void duplicateTargetsFallBackToOnlineServersWhenTheApiHasNoServerList() {
         List<KnownServer> targets = ServerCreationPolicy.duplicateTargets(Optional.empty(), List.of("dev", "lobby"), "");
 

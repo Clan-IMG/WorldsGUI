@@ -223,7 +223,7 @@ public final class BackupService {
                 return;
             }
 
-            for (BackupJob job : repository.claimBackupJobs(server, free)) {
+            for (BackupJob job : repository.claimBackupJobs(server, hooks.localServerGroup(), free)) {
                 JobContext context = new JobContext(job);
                 activeJobs.put(job.id(), context);
                 try {
