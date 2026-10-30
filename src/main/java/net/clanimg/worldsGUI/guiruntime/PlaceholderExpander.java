@@ -21,7 +21,15 @@ public final class PlaceholderExpander {
     private static final Map<String, java.util.function.BiFunction<Player, String, String>> WORLD_PLACEHOLDERS =
         new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** Vom Plugin registrierte Platzhalter, die nur vom Spieler abhängen (z.B. %sort_mode%). */
+    private static final Map<String, Function<Player, String>> PLAYER_PLACEHOLDERS =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
     private PlaceholderExpander() {
+    }
+
+    public static void registerPlayerPlaceholder(String key, Function<Player, String> resolver) {
+        PLAYER_PLACEHOLDERS.put(key, resolver);
     }
 
     public static void registerWorldPlaceholder(String key, java.util.function.BiFunction<Player, String, String> resolver) {
@@ -41,6 +49,13 @@ public final class PlaceholderExpander {
 
         if (player != null) {
             result = result.replace("%player_name%", player.getName());
+            for (Map.Entry<String, Function<Player, String>> entry : PLAYER_PLACEHOLDERS.entrySet()) {
+                String placeholder = "%" + entry.getKey() + "%";
+                if (result.contains(placeholder)) {
+                    String value = entry.getValue().apply(player);
+                    result = result.replace(placeholder, value == null ? "" : value);
+                }
+            }
         }
 
         String world = extra != null && extra.get("world") != null

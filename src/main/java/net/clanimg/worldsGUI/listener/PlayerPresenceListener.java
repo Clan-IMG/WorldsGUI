@@ -26,6 +26,7 @@ public final class PlayerPresenceListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         updatePresence(player.getName(), player.getWorld().getName(), true);
+        guiManager.recordWorldVisit(player);
         guiManager.notifyCustomerActiveTicketOnJoin(player);
         Bukkit.getScheduler().runTaskLater(plugin, () -> guiManager.applyWorldDefaultsOnEnter(player), 10L);
         Bukkit.getScheduler().runTask(plugin, () -> guiManager.handlePlayerJoin(player));
@@ -35,12 +36,14 @@ public final class PlayerPresenceListener implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         updatePresence(player.getName(), player.getWorld().getName(), false);
+        guiManager.handlePlayerQuit(player);
     }
 
     @EventHandler
     public void onChangedWorld(PlayerChangedWorldEvent event) {
         Player player = event.getPlayer();
         updatePresence(player.getName(), player.getWorld().getName(), true);
+        guiManager.recordWorldVisit(player);
         Bukkit.getScheduler().runTask(plugin, () -> guiManager.applyWorldDefaultsOnEnter(player));
     }
 

@@ -1,9 +1,11 @@
 package net.clanimg.worldsGUI.guiconfig;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -16,28 +18,61 @@ class GuiConfigLoaderPaginationTest {
     private static final Logger LOGGER = Logger.getLogger("GuiConfigLoaderPaginationTest");
 
     @Test
-    void bundledGuisYamlHasPaginationRecentWorldsAndChunkyToggle() throws Exception {
-        YamlConfiguration yaml = new YamlConfiguration();
-        try (InputStream in = getClass().getClassLoader().getResourceAsStream("guis.yml")) {
-            assertNotNull(in, "guis.yml muss auf dem Klassenpfad liegen");
-            yaml.load(new InputStreamReader(in, StandardCharsets.UTF_8));
-        }
-
-        GuiConfig config = GuiConfigLoader.loadFromYaml(yaml, LOGGER);
+    void bundledGuisYamlHasLeftAlignedNavigationSortItemAndChunkyToggle() throws Exception {
+        GuiConfig config = GuiConfigLoader.loadFromYaml(bundledYaml(), LOGGER);
 
         GuiDefinition myWorlds = config.get("my-worlds").orElseThrow();
+        assertEquals("invited-worlds", myWorlds.rowSlots().get(1).action().anyClickTrigger().guiId());
+        assertEquals("tickets", myWorlds.rowSlots().get(2).action().anyClickTrigger().guiId());
+        GuiAction sort = myWorlds.rowSlots().get(3).action();
+        assertEquals("nav sort next", sort.leftClickTrigger().command());
+        assertEquals("nav sort previous", sort.rightClickTrigger().command());
+        assertEquals("create-world", myWorlds.rowSlots().get(9).action().anyClickTrigger().guiId());
+        assertNull(myWorlds.rowSlots().get(4));
         assertNotNull(myWorlds.pagination());
-        assertEquals(1, myWorlds.pagination().previousSlot());
+        assertEquals(7, myWorlds.pagination().previousSlot());
         assertEquals(8, myWorlds.pagination().nextSlot());
-        assertEquals("recent-worlds", myWorlds.rowSlots().get(9).action().anyClickTrigger().guiId());
 
-        GuiDefinition recent = config.get("recent-worlds").orElseThrow();
-        assertEquals(18, recent.size());
+        assertTrue(config.get("recent-worlds").isEmpty(), "das eigene GUI für zuletzt besuchte Welten entfällt");
 
         GuiTrigger chunkyToggle = config.get("edit-world").orElseThrow().rowSlots().get(6).action().anyClickTrigger();
         assertEquals(TriggerType.TOGGLE, chunkyToggle.type());
         assertEquals("chunky", chunkyToggle.toggleStateSource());
         assertEquals("off", chunkyToggle.toggleStartState());
+    }
+
+    @Test
+    void serverSelectionIsSharedByCreateAndDuplicate() throws Exception {
+        GuiConfig config = GuiConfigLoader.loadFromYaml(bundledYaml(), LOGGER);
+
+        GuiTrigger pickServer = config.get("select-server").orElseThrow().slotRanges().get(0).action().anyClickTrigger();
+        assertEquals("nav server-selected %server-purpose% %selection:server%", pickServer.params().get("confirm-command"));
+        for (int slot : new int[] {5, 7}) {
+            GuiTrigger worldType = config.get("create-world").orElseThrow().rowSlots().get(slot).action().anyClickTrigger();
+            assertEquals("select-server", worldType.guiId());
+            assertEquals("create", worldType.params().get("server-purpose"));
+        }
+    }
+
+    @Test
+    void theShippedGuisYamlIsNotListedAsSupersededButItsPredecessorIs() throws Exception {
+        byte[] shipped;
+        try (InputStream in = getClass().getClassLoader().getResourceAsStream("guis.yml")) {
+            shipped = in.readAllBytes();
+        }
+        assertFalse(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(GuiConfigLoader.sha256(shipped)),
+            "sonst würde die aktuelle guis.yml bei jedem Start erneut ersetzt");
+        assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
+            "c96d88033aabc0834c94a34c4a7c8bc3e31271084d60a0f5e95c60b183b09387"), "Stand vom 23.10.2026 auf den Servern");
+    }
+
+    private YamlConfiguration bundledYaml() throws Exception {
+        YamlConfiguration yaml = new YamlConfiguration();
+        try (InputStream in = getClass().getClassLoader().getResourceAsStream("guis.yml")) {
+            assertNotNull(in, "guis.yml muss auf dem Klassenpfad liegen");
+            yaml.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+        }
+        return yaml;
     }
 
     @Test

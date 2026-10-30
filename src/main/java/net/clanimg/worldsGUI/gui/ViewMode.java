@@ -4,6 +4,5 @@ public enum ViewMode {
     OWN,
     INVITED,
     PUBLIC,
-    ARCHIVED,
-    RECENT
+    ARCHIVED
 }

@@ -14,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -568,6 +569,95 @@ public final class WorldsRepository {
         }
     }
 
+    /** failed = API nicht erreichbar/Fehler; worldSort null = noch keine Sortierung gewählt. */
+    public record PlayerSettingsLookup(boolean failed, String worldSort) {}
+
+    /**
+     * Meldet, dass der Spieler eine Welt betreten hat. Die API speichert nur Welten, die es gibt.
+     * @param visitedAt Epoch-Millis, nur für die Übernahme alter Daten; {@code null} = jetzt (API-Zeit)
+     */
+    public boolean recordWorldVisit(String playerUuid, String worldName, Long visitedAt) {
+        JsonObject body = new JsonObject();
+        body.addProperty("worldName", worldName);
+        if (visitedAt != null) {
+            body.addProperty("visitedAt", visitedAt);
+        }
+        try {
+            ApiResponse response = request("PUT", "/players/" + encode(playerUuid) + "/world-visits", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("world-visit", "Welt-Besuch API Fehler: HTTP " + response.statusCode());
+                return false;
+            }
+            return true;
+        } catch (Exception ex) {
+            warnThrottled("world-visit-ex", "Fehler beim Speichern des Welt-Besuchs via API: " + ex.getMessage());
+            return false;
+        }
+    }
+
+    /** Letzter Besuch je Welt (Epoch-Millis); leer, wenn die API nicht gefragt werden konnte. */
+    public Optional<Map<String, Long>> fetchWorldVisits(String playerUuid) {
+        try {
+            ApiResponse response = request("GET", "/players/" + encode(playerUuid) + "/world-visits", null);
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("world-visits", "Welt-Besuche API Fehler: HTTP " + response.statusCode());
+                return Optional.empty();
+            }
+            JsonObject json = parseObject(response.body());
+            Map<String, Long> visits = new HashMap<>();
+            if (json.has("visits") && json.get("visits").isJsonArray()) {
+                for (JsonElement element : json.getAsJsonArray("visits")) {
+                    if (!element.isJsonObject()) {
+                        continue;
+                    }
+                    JsonObject visit = element.getAsJsonObject();
+                    String worldName = getString(visit, "worldName", "");
+                    if (!worldName.isBlank() && visit.has("visitedAt") && !visit.get("visitedAt").isJsonNull()) {
+                        visits.put(worldName, visit.get("visitedAt").getAsLong());
+                    }
+                }
+            }
+            return Optional.of(visits);
+        } catch (Exception ex) {
+            warnThrottled("world-visits-ex", "Fehler beim Laden der Welt-Besuche via API: " + ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public PlayerSettingsLookup fetchPlayerSettings(String playerUuid) {
+        try {
+            ApiResponse response = request("GET", "/players/" + encode(playerUuid) + "/settings", null);
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("player-settings", "Spieler-Einstellungen API Fehler: HTTP " + response.statusCode());
+                return new PlayerSettingsLookup(true, null);
+            }
+            JsonObject json = parseObject(response.body());
+            JsonObject settings = json.has("settings") && json.get("settings").isJsonObject()
+                ? json.getAsJsonObject("settings")
+                : new JsonObject();
+            return new PlayerSettingsLookup(false, getNullableString(settings, "worldSort"));
+        } catch (Exception ex) {
+            warnThrottled("player-settings-ex", "Fehler beim Laden der Spieler-Einstellungen via API: " + ex.getMessage());
+            return new PlayerSettingsLookup(true, null);
+        }
+    }
+
+    public boolean updateWorldSort(String playerUuid, String worldSort) {
+        JsonObject body = new JsonObject();
+        body.addProperty("worldSort", worldSort);
+        try {
+            ApiResponse response = request("PUT", "/players/" + encode(playerUuid) + "/settings", gson.toJson(body));
+            if (response.statusCode() / 100 != 2) {
+                warnThrottled("player-settings-put", "Spieler-Einstellungen API Fehler: HTTP " + response.statusCode());
+                return false;
+            }
+            return true;
+        } catch (Exception ex) {
+            warnThrottled("player-settings-put-ex", "Fehler beim Speichern der Spieler-Einstellungen via API: " + ex.getMessage());
+            return false;
+        }
+    }
+
     public void upsertServerPresence(String serverName, boolean online, String status, int heartbeatIntervalSeconds) {
         String normalizedServer = serverName == null ? "" : serverName.trim();
         if (normalizedServer.isBlank()) {
@@ -703,6 +793,21 @@ public final class WorldsRepository {
         if (backupId != null) {
             body.addProperty("backupId", backupId);
         }
+        if (requestedBy != null) {
+            body.addProperty("requestedBy", requestedBy);
+        }
+        return backupCall("POST", "/world-backups/jobs", body);
+    }
+
+    /**
+     * Duplikat einer Welt über die Backup-Kette: der Server der Quellwelt erstellt ein Backup, danach spielt die API es
+     * automatisch auf dem Server der (bereits angelegten) Zielwelt ein.
+     */
+    public BackupApiResult createCloneJob(String sourceWorldName, String targetWorldName, String requestedBy) {
+        JsonObject body = new JsonObject();
+        body.addProperty("worldName", sourceWorldName);
+        body.addProperty("jobType", "clone");
+        body.addProperty("cloneTarget", targetWorldName);
         if (requestedBy != null) {
             body.addProperty("requestedBy", requestedBy);
         }
@@ -855,7 +960,9 @@ public final class WorldsRepository {
             getNullableString(row, "requestedBy"),
             getString(row, "status", "queued"),
             getNullableString(row, "message"),
-            getInt(row, "attempts", 0)
+            getInt(row, "attempts", 0),
+            getNullableString(row, "cloneTarget"),
+            getNullableString(row, "cloneSource")
         );
     }
 
@@ -1175,8 +1282,15 @@ public final class WorldsRepository {
         String requestedBy,
         String status,
         String message,
-        int attempts
+        int attempts,
+        /** Backup-Auftrag, der ein Duplikat vorbereitet: Name der Zielwelt (sonst null). */
+        String cloneTarget,
+        /** Restore-Auftrag eines Duplikats: Name der Quellwelt (sonst null). */
+        String cloneSource
     ) {
+        public boolean isClonePart() {
+            return cloneTarget != null || cloneSource != null;
+        }
     }
 
     public record WorldBackupOverview(int manualLimit, List<BackupEntry> backups, List<BackupJob> jobs) {

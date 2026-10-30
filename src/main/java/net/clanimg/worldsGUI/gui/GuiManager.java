@@ -9,6 +9,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.Objects;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -187,10 +189,16 @@ public final class GuiManager {
         this.worldDefaultsConfig = loadWorldDefaultsConfig();
         this.backupService = new BackupService(plugin, repository, new BackupHooks());
         this.chunky = new ChunkyBridge(plugin);
-        this.recentWorlds = new RecentWorldsStore(plugin);
+        this.recentWorlds = new RecentWorldsStore(plugin, repository, this::refreshMyWorldsIfOpen);
         ToggleRuntime.registerStateSource("chunky", (viewer, world) -> chunky.isRunning(world) ? "on" : "off");
         PlaceholderExpander.registerWorldPlaceholder("chunky_status", (viewer, world) -> chunkyStatusText(world));
         PlaceholderExpander.registerWorldPlaceholder("chunky_radius", (viewer, world) -> Integer.toString(chunky.radius()));
+        // Sortier-Item in "Meine Welten": aktueller Modus und je Modus eine (markierte) Lore-Zeile.
+        PlaceholderExpander.registerPlayerPlaceholder("sort_mode", viewer -> recentWorlds.sortMode(viewer.getUniqueId()).label());
+        for (WorldSortMode mode : WorldSortMode.values()) {
+            PlaceholderExpander.registerPlayerPlaceholder("sort_option_" + mode.key(), viewer ->
+                recentWorlds.sortMode(viewer.getUniqueId()) == mode ? "&a▶ &f" + mode.label() : "&8• &7" + mode.label());
+        }
         this.triggerDispatcher = new TriggerDispatcher(
             this::openGui,
             (player, command, chatFeedback) -> {
@@ -454,6 +462,10 @@ public final class GuiManager {
         ViewMode effectiveMode = mode == null ? ViewMode.OWN : mode;
 
         List<WorldEntry> worlds = listWorldsFor(player, effectiveMode);
+        if (effectiveMode == ViewMode.OWN) {
+            UUID playerId = player.getUniqueId();
+            worlds = WorldSorter.sort(worlds, recentWorlds.sortMode(playerId), recentWorlds.lastVisits(playerId));
+        }
 
         // Freie Slots für Welten (alles, was slot-1..9 und slot-range nicht belegt haben).
         List<Integer> freeSlots = new ArrayList<>();
@@ -478,7 +490,8 @@ public final class GuiManager {
                 break;
             }
             WorldEntry entry = worlds.get(worldIndex++);
-            inventory.setItem(absoluteSlot, worldIcon(entry, effectiveMode, player.getWorld().getName(), canManageWorld(player, entry)));
+            inventory.setItem(absoluteSlot, worldIcon(entry, effectiveMode, player.getWorld().getName(), canManageWorld(player, entry),
+                canDuplicateWorld(player, entry)));
         }
 
         renderPaginationButtons(inventory, holder, definition, player, session, page, pageCount);
@@ -514,7 +527,6 @@ public final class GuiManager {
             case "invited-worlds" -> ViewMode.INVITED;
             case "archived-tickets" -> ViewMode.ARCHIVED;
             case "tickets" -> ViewMode.PUBLIC;
-            case "recent-worlds" -> ViewMode.RECENT;
             default -> null;
         };
     }
@@ -802,6 +814,11 @@ public final class GuiManager {
 
         if (event.isLeftClick()) {
             joinWorld(player, worldName, true);
+            return;
+        }
+
+        if (event.isShiftClick() && event.isRightClick()) {
+            startDuplicate(player, worldName);
             return;
         }
 
@@ -2099,6 +2116,328 @@ public final class GuiManager {
         return null;
     }
 
+    // ------------------------------------------------------------------ Sortierung "Meine Welten"
+
+    /** /nav sort [next|previous|&lt;modus&gt;] - schaltet die Sortierung der eigenen Welten um (Sortier-Item im Menü). */
+    public void executeNavSort(Player player, String argument) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV, true)) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        WorldSortMode current = recentWorlds.sortMode(playerId);
+        String normalized = argument == null ? "next" : argument.trim().toLowerCase(Locale.ROOT);
+        WorldSortMode selected = switch (normalized) {
+            case "next" -> current.next();
+            case "previous", "prev" -> current.previous();
+            default -> WorldSortMode.parse(normalized).orElse(null);
+        };
+        if (selected == null) {
+            sendWithPrefix(player, "sort.unknown", "&cUnbekannte Sortierung &f%mode%&c.", "%mode%", argument);
+            return;
+        }
+        recentWorlds.setSortMode(playerId, selected);
+        playerSessions.getOrCreate(playerId).setPage("my-worlds", 0);
+        // Aus dem Menü heraus: neu aufbauen (ohne Eintrag im Zurück-Verlauf).
+        if (player.getOpenInventory().getTopInventory().getHolder() instanceof RuntimeGuiHolder holder
+            && "my-worlds".equals(holder.guiId())) {
+            openGui(player, "my-worlds");
+        } else {
+            sendWithPrefix(player, "sort.changed", "&7Sortierung von &fMeine Welten&7: &f%mode%", "%mode%", selected.label());
+        }
+    }
+
+    /** Betreten einer Welt (Join oder Weltwechsel, egal wie) - zählt netzwerkweit für "Zuletzt besucht". */
+    public void recordWorldVisit(Player player) {
+        recentWorlds.record(player.getUniqueId(), player.getWorld().getName());
+    }
+
+    public void handlePlayerQuit(Player player) {
+        recentWorlds.forget(player.getUniqueId());
+    }
+
+    /** Sortierung bzw. Besuche kamen erst nach dem Öffnen aus der API - offenes "Meine Welten" neu aufbauen. */
+    private void refreshMyWorldsIfOpen(UUID playerId) {
+        Player player = Bukkit.getPlayer(playerId);
+        if (player != null && player.getOpenInventory().getTopInventory().getHolder() instanceof RuntimeGuiHolder holder
+            && "my-worlds".equals(holder.guiId())) {
+            openGui(player, "my-worlds");
+        }
+    }
+
+    // ------------------------------------------------------------------ Gemeinsame Serverauswahl
+
+    /**
+     * Ziel der Serverauswahl (select-server in guis.yml): {@code create} erstellt eine neue Welt mit dem zuvor gewählten
+     * Welttyp, {@code duplicate} dupliziert die per Shift-Rechtsklick gewählte Welt auf den Server.
+     */
+    public void executeServerSelected(Player player, String purpose, String serverId) {
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        switch (purpose == null ? "" : purpose.trim().toLowerCase(Locale.ROOT)) {
+            case "create" -> executeNavCreateWizard(player, session.selection("world-type"), serverId);
+            case "duplicate" -> executeDuplicate(player, session.guiParam("duplicate-world"), serverId);
+            default -> sendWithPrefix(player, "usage.nav.server-selected",
+                "Usage: /nav server-selected <create|duplicate> <server-id>", "%label%", "nav");
+        }
+    }
+
+    /** Ob select-server (ggf. eine ältere, angepasste guis.yml auf dem Server) schon über /nav server-selected läuft. */
+    private boolean serverSelectionSupportsPurpose() {
+        GuiConfig config = guiConfig;
+        if (config == null) {
+            return false;
+        }
+        return config.get("select-server")
+            .map(definition -> definition.slotRanges().stream()
+                .map(GuiSlotRangeDefinition::action)
+                .filter(Objects::nonNull)
+                .flatMap(action -> Stream.of(action.anyClickTrigger(), action.leftClickTrigger(), action.rightClickTrigger()))
+                .filter(Objects::nonNull)
+                .anyMatch(trigger -> trigger.params().values().stream()
+                    .anyMatch(value -> value != null && value.contains("server-selected"))))
+            .orElse(false);
+    }
+
+    // ------------------------------------------------------------------ Welt duplizieren (Shift-Rechtsklick)
+
+    /** Eigene private Welten (Admins: alle privaten), nicht archiviert. */
+    private boolean canDuplicateWorld(Player player, WorldEntry entry) {
+        if (entry == null || entry.isArchived() || isTicketWorld(entry) || !player.hasPermission(Permissions.NAV_MY_WORLD_CLONE)) {
+            return false;
+        }
+        return entry.ownerUuid().equals(player.getUniqueId().toString()) || player.hasPermission(Permissions.ADMIN);
+    }
+
+    private void startDuplicate(Player player, String worldName) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CLONE, true)) {
+            return;
+        }
+        Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+        if (entry.isEmpty()) {
+            send(player, "world-not-found");
+            return;
+        }
+        if (!checkDuplicateSource(player, entry.get())) {
+            return;
+        }
+        if (!serverSelectionSupportsPurpose()) {
+            sendWithPrefix(player, "duplicate.gui-outdated",
+                "&cDie Serverauswahl in der guis.yml dieses Servers ist veraltet - Duplizieren ist erst nach einem Update möglich.");
+            plugin.getLogger().warning("Duplizieren nicht möglich: select-server in plugins/WorldsGUI/guis.yml nutzt nicht"
+                + " '/nav server-selected'. Datei aktualisieren (siehe guis.yml im Jar).");
+            return;
+        }
+        PlayerGuiSession session = playerSessions.getOrCreate(player.getUniqueId());
+        session.putGuiParams(Map.of("server-purpose", "duplicate", "duplicate-world", entry.get().worldName()));
+        session.pushCurrentToHistory();
+        openGui(player, "select-server");
+    }
+
+    private boolean checkDuplicateSource(Player player, WorldEntry entry) {
+        if (entry.isArchived()) {
+            sendWithPrefix(player, "duplicate.archived", "&cArchivierte Welten können nicht dupliziert werden.");
+            return false;
+        }
+        if (isTicketWorld(entry)) {
+            sendWithPrefix(player, "duplicate.ticket-world", "&cTicket-Welten können nicht dupliziert werden.");
+            return false;
+        }
+        if (!entry.ownerUuid().equals(player.getUniqueId().toString()) && !player.hasPermission(Permissions.ADMIN)) {
+            send(player, "not-world-owner");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Dupliziert eine Welt mit allen Einstellungen (Eingeladene, Vertraute, Öffentlich, Icon, Spawn) auf einen Server.
+     * Der echte Weltname ist eine neue ID ({@code <besitzer>-<id>}), der Anzeigename bekommt " Copy" angehängt.
+     * Liegt die Quelle auf diesem Server und ist er auch das Ziel, wird lokal per Multiverse geklont; sonst übernimmt die
+     * Backup-Kette (Backup auf dem Quellserver, Restore in die neue Welt auf dem Zielserver).
+     */
+    public void executeDuplicate(Player player, String sourceWorldName, String targetServerArg) {
+        if (!hasPermission(player, Permissions.USE, true) || !hasPermission(player, Permissions.NAV_MY_WORLD_CLONE, true)) {
+            return;
+        }
+        String sourceName = sourceWorldName == null ? "" : sourceWorldName.trim();
+        if (sourceName.isBlank()) {
+            sendWithPrefix(player, "duplicate.no-world", "&cKeine Welt zum Duplizieren ausgewählt (Shift-Rechtsklick auf eine Welt).");
+            return;
+        }
+        String requestedServer = targetServerArg == null ? "" : targetServerArg.trim();
+        if (requestedServer.isBlank()) {
+            send(player, "create.server-missing");
+            return;
+        }
+        if (isBlockedServerName(requestedServer)) {
+            send(player, "create.server-blocked", "%server%", requestedServer);
+            return;
+        }
+        List<String> selectableServers = resolveSelectableServerNames();
+        Optional<String> knownServer = selectableServers.stream().filter(server -> server.equalsIgnoreCase(requestedServer)).findFirst();
+        if (!selectableServers.isEmpty() && knownServer.isEmpty()) {
+            send(player, "create.server-unknown", "%server%", requestedServer);
+            return;
+        }
+        String targetServer = knownServer.orElse(requestedServer);
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Optional<WorldEntry> sourceOpt = repository.findByWorldName(sourceName);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                if (sourceOpt.isEmpty()) {
+                    send(player, "world-not-found");
+                    return;
+                }
+                WorldEntry source = sourceOpt.get();
+                if (!checkDuplicateSource(player, source)) {
+                    return;
+                }
+                String copyName = generateCloneWorldName(source.ownerName());
+                if (copyName.isBlank()) {
+                    send(player, "clone.name-generation-failed");
+                    return;
+                }
+                String baseName = source.displayName() == null || source.displayName().isBlank()
+                    ? source.worldName() : source.displayName();
+                String copyDisplayName = baseName + " Copy";
+                String localServer = resolveLocalServerId();
+                boolean localSourceAndTarget = isWorldOnThisServer(source) && targetServer.equalsIgnoreCase(localServer);
+                if (localSourceAndTarget) {
+                    duplicateLocally(player, source, copyName, copyDisplayName, localServer);
+                } else {
+                    duplicateViaBackup(player, source, copyName, copyDisplayName, targetServer);
+                }
+            });
+        });
+    }
+
+    private void duplicateLocally(Player player, WorldEntry source, String copyName, String copyDisplayName, String localServer) {
+        if (!checkLocalWorldCreation(player)) {
+            return;
+        }
+        boolean cloneTriggered = generationDebug.dispatchCommand("duplicateLocally.clone@GuiManager", Bukkit.getConsoleSender(),
+            "mv clone " + source.worldName() + " " + copyName);
+        if (!cloneTriggered) {
+            send(player, "clone.mv-failed");
+            return;
+        }
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            World copy = Bukkit.getWorld(copyName);
+            if (copy == null) {
+                generationDebug.dispatchCommand("duplicateLocally.load@GuiManager", Bukkit.getConsoleSender(), "mv load " + copyName);
+                copy = Bukkit.getWorld(copyName);
+            }
+            if (copy == null) {
+                send(player, "clone.load-failed", "%world%", copyName);
+                return;
+            }
+            World loadedCopy = copy;
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                boolean persisted = persistDuplicateMetadata(source, copyName, copyDisplayName, localServer);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!persisted) {
+                        send(player, "clone.db-failed", "%world%", copyName);
+                        return;
+                    }
+                    applyWorldGuardProtection(loadedCopy, source.ownerUuid(), source.ownerName(),
+                        source.invitedPlayers(), source.trustedPlayers());
+                    runPostCreateCommands(loadedCopy);
+                    if (player.isOnline()) {
+                        sendWithPrefix(player, "duplicate.done-local",
+                            "&aDie Welt &f%source%&a wurde als &f%copy%&a dupliziert.",
+                            "%source%", displayOrWorldName(source), "%copy%", copyDisplayName);
+                    }
+                });
+            });
+        }, 20L);
+    }
+
+    private void duplicateViaBackup(Player player, WorldEntry source, String copyName, String copyDisplayName, String targetServer) {
+        if (!backupService.isEnabled()) {
+            sendWithPrefix(player, "duplicate.backups-disabled",
+                "&cDuplizieren auf einen anderen Server braucht das Backup-System - es ist auf diesem Server nicht aktiv.");
+            return;
+        }
+        sendWithPrefix(player, "duplicate.started",
+            "&7Die Welt &f%source%&7 wird als &f%copy%&7 auf &f%server%&7 dupliziert. Je nach Weltgröße dauert das einen Moment"
+                + " - du bekommst eine Nachricht, sobald sie fertig ist.",
+            "%source%", displayOrWorldName(source), "%copy%", copyDisplayName, "%server%", targetServer);
+        String requestedBy = player.getName();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            if (!persistDuplicateMetadata(source, copyName, copyDisplayName, targetServer)) {
+                Bukkit.getScheduler().runTask(plugin, () -> send(player, "clone.db-failed", "%world%", copyName));
+                return;
+            }
+            WorldsRepository.BackupApiResult result = repository.createCloneJob(source.worldName(), copyName, requestedBy);
+            if (!result.ok()) {
+                // Ohne Auftrag bliebe nur eine leere Welt übrig - Eintrag wieder entfernen.
+                repository.deleteWorld(copyName);
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!result.ok() && player.isOnline()) {
+                    sendWithPrefix(player, "duplicate.failed", "&cDas Duplizieren konnte nicht gestartet werden: &f%reason%",
+                        "%reason%", duplicateFailureReason(result));
+                }
+            });
+        });
+    }
+
+    /** Legt den Datenbankeintrag der Kopie mit allen Einstellungen der Quelle an (blockierend, nicht im Hauptthread). */
+    private boolean persistDuplicateMetadata(WorldEntry source, String copyName, String copyDisplayName, String serverName) {
+        int worldIndex = repository.nextWorldIndex(source.ownerUuid());
+        boolean inserted = repository.insertWorld(
+            copyName,
+            source.ownerUuid(),
+            source.ownerName(),
+            null,
+            null,
+            "private",
+            null,
+            List.of(),
+            worldIndex,
+            copyDisplayName,
+            source.iconMaterial(),
+            source.isPublic(),
+            false,
+            serverName
+        );
+        if (!inserted) {
+            return false;
+        }
+        if (source.invitedPlayers() != null && !source.invitedPlayers().isEmpty()) {
+            repository.setInvitedPlayers(copyName, source.invitedPlayers());
+        }
+        if (source.trustedPlayers() != null && !source.trustedPlayers().isEmpty()) {
+            repository.setTrustedPlayers(copyName, source.trustedPlayers());
+        }
+        if (source.spawnX() != null && source.spawnY() != null && source.spawnZ() != null) {
+            repository.setSpawn(copyName, new Location(null, source.spawnX(), source.spawnY(), source.spawnZ(),
+                source.spawnYaw() == null ? 0f : source.spawnYaw(), source.spawnPitch() == null ? 0f : source.spawnPitch()));
+        }
+        return true;
+    }
+
+    private static String duplicateFailureReason(WorldsRepository.BackupApiResult result) {
+        String detail = result.detail();
+        if (result.statusCode() == 422) {
+            return "die WorldsGUI-API kennt das Duplizieren noch nicht (API aktualisieren)";
+        }
+        return switch (detail) {
+            case "already-queued" -> "für diese Welt läuft bereits ein Duplikat";
+            case "world-archived" -> "die Welt ist archiviert";
+            case "world-not-found" -> "die Welt wurde nicht gefunden";
+            case "api-unreachable" -> "die WorldsGUI-API ist nicht erreichbar";
+            case "" -> "Fehler " + result.statusCode();
+            default -> detail;
+        };
+    }
+
+    private static String displayOrWorldName(WorldEntry entry) {
+        return entry.displayName() == null || entry.displayName().isBlank() ? entry.worldName() : entry.displayName();
+    }
+
     private String generateCloneWorldName(String ownerName) {
         String safeOwner = ownerName == null || ownerName.isBlank() ? "world" : ownerName.trim();
         for (int attempt = 0; attempt < 200; attempt++) {
@@ -2744,6 +3083,7 @@ public final class GuiManager {
         }
 
         UUID playerId = player.getUniqueId();
+        recentWorlds.load(playerId);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             String pendingWorldName = repository.consumePendingWorldTransfer(player.getName());
             boolean pending = pendingWorldName != null && !pendingWorldName.isBlank();
@@ -3428,16 +3768,6 @@ public final class GuiManager {
 
         if (mode == ViewMode.ARCHIVED) {
             return admin ? repository.listArchivedWorlds() : List.of();
-        }
-
-        if (mode == ViewMode.RECENT) {
-            List<WorldEntry> recent = new ArrayList<>();
-            for (String worldName : recentWorlds.recent(UUID.fromString(ownerUuid))) {
-                repository.findByWorldName(worldName)
-                    .filter(entry -> !entry.isArchived())
-                    .ifPresent(recent::add);
-            }
-            return recent;
         }
 
         if (mode == ViewMode.PUBLIC) {
@@ -4506,6 +4836,11 @@ public final class GuiManager {
             Plugin mvCore = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
             if (mvCore != null && mvCore.isEnabled()) {
                 generationDebug.dispatchCommand("BackupHooks.loadWorld@GuiManager:4257", Bukkit.getConsoleSender(), "mv load " + worldName);
+                if (Bukkit.getWorld(worldName) == null) {
+                    // Neue Welt (z. B. Duplikat von einem anderen Server): Multiverse kennt sie noch nicht.
+                    generationDebug.dispatchCommand("BackupHooks.loadWorld.import@GuiManager", Bukkit.getConsoleSender(),
+                        "mv import " + worldName + " normal");
+                }
             }
             return Bukkit.getWorld(worldName) != null;
         }
@@ -4518,6 +4853,10 @@ public final class GuiManager {
         @Override
         public void notifyJobResult(Player player, BackupJob job) {
             String worldName = job.worldName();
+            if (job.isClonePart()) {
+                notifyDuplicateResult(player, job);
+                return;
+            }
             if (!"done".equalsIgnoreCase(job.status())) {
                 sendWithPrefix(
                     player,
@@ -4531,6 +4870,31 @@ public final class GuiManager {
             } else {
                 sendWithPrefix(player, "backup.result.backup-done", "Das Backup von &f%world%&7 ist fertig.", "%world%", worldName);
             }
+        }
+    }
+
+    /**
+     * Meldungen der Duplikat-Kette: das Backup der Quelle ist nur ein Zwischenschritt (still, außer bei Fehlern),
+     * der Restore in die Kopie ist das eigentliche Ergebnis.
+     */
+    private void notifyDuplicateResult(Player player, BackupJob job) {
+        boolean done = "done".equalsIgnoreCase(job.status());
+        String reason = job.message() == null || job.message().isBlank() ? "unbekannter Fehler" : job.message();
+        if (job.cloneTarget() != null) {
+            if (!done) {
+                sendWithPrefix(player, "duplicate.result.backup-failed",
+                    "&cDas Duplizieren von &f%source%&c ist fehlgeschlagen (Sicherung der Quelle): &f%reason%",
+                    "%source%", job.worldName(), "%reason%", reason);
+            }
+            return;
+        }
+        if (done) {
+            sendWithPrefix(player, "duplicate.result.done",
+                "&aDas Duplikat &f%copy%&a von &f%source%&a ist fertig.", "%copy%", job.worldName(), "%source%", job.cloneSource());
+        } else {
+            sendWithPrefix(player, "duplicate.result.failed",
+                "&cDas Duplikat &f%copy%&c konnte nicht eingespielt werden: &f%reason%",
+                "%copy%", job.worldName(), "%reason%", reason);
         }
     }
 
@@ -4616,8 +4980,6 @@ public final class GuiManager {
             }
             return false;
         }
-
-        recentWorlds.record(player.getUniqueId(), entry.worldName());
 
         if (!isWorldOnThisServer(entry)) {
             if (notify) {
@@ -5475,6 +5837,11 @@ public final class GuiManager {
     }
 
     private ItemStack worldIcon(WorldEntry entry, ViewMode mode, String currentWorldName, boolean hasSettingsRights) {
+        return worldIcon(entry, mode, currentWorldName, hasSettingsRights, false);
+    }
+
+    private ItemStack worldIcon(WorldEntry entry, ViewMode mode, String currentWorldName, boolean hasSettingsRights,
+                                boolean canDuplicate) {
         Material material = Material.matchMaterial(entry.iconMaterial());
         if (material == null || !material.isItem()) {
             material = Material.GRASS_BLOCK;
@@ -5501,6 +5868,10 @@ public final class GuiManager {
                 continue;
             }
             lore.add(legacyLine(resolved));
+        }
+        if (canDuplicate) {
+            lore.add(legacyLine(plugin.getConfig().getString("hoover-dialog.duplicate-line",
+                "&r&7<Shift + Rechtsklick> &bDuplizieren")));
         }
 
         return namedWorldItem(material, title, entry.worldName(), lore, isCurrentWorld);

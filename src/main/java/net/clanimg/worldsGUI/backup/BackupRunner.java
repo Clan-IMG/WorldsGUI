@@ -292,9 +292,18 @@ final class BackupRunner {
         BackupDownload download = repository.requestBackupDownload(job.backupId())
             .orElseThrow(() -> new BackupException("Das Backup existiert nicht mehr"));
 
+        boolean clone = job.cloneSource() != null;
         try {
             writeState(world, job.id(), Phase.PREPARING);
             downloadAndExtract(ctx, download, tmp);
+            if (clone) {
+                // Duplikat: die Welt-ID der Quelle darf nicht mitkommen, sonst lädt Paper die Kopie neben dem Original nicht.
+                Files.deleteIfExists(tmp.resolve("uid.dat"));
+            }
+        } catch (IOException ex) {
+            deleteRecursive(tmp);
+            states.clear(world);
+            throw new BackupException("Die Welt-ID des Duplikats konnte nicht entfernt werden: " + ex.getMessage());
         } catch (RuntimeException ex) {
             deleteRecursive(tmp);
             states.clear(world);
@@ -309,8 +318,11 @@ final class BackupRunner {
                     throw new BackupException("Die Welt konnte nicht entladen werden");
                 }
 
-                ctx.phase("undo-backup");
-                uploadWorld(ctx, world, "undo");
+                if (!clone) {
+                    // Bei einem Duplikat ist die Zielwelt neu und leer - ein Undo-Backup davon wäre nutzlos.
+                    ctx.phase("undo-backup");
+                    uploadWorld(ctx, world, "undo");
+                }
             }
 
             ctx.phase("swap");

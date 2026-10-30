@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import net.clanimg.worldsGUI.gui.GuiManager;
+import net.clanimg.worldsGUI.gui.WorldSortMode;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -38,6 +39,19 @@ public final class NavCommand implements TabExecutor {
 
         String sub = args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
+            case "sort" -> {
+                guiManager.executeNavSort(player, args.length >= 2 ? args[1] : "next");
+                return true;
+            }
+            case "server-selected" -> {
+                // Ziel der gemeinsamen Serverauswahl (select-server in guis.yml): Welt erstellen oder duplizieren.
+                if (args.length < 3) {
+                    guiManager.sendWithPrefix(player, "usage.nav.server-selected", "Usage: /nav server-selected <create|duplicate> <server-id>", "%label%", label);
+                    return true;
+                }
+                guiManager.executeServerSelected(player, args[1], args[2]);
+                return true;
+            }
             case "create" -> {
                 if (args.length < 2) {
                     guiManager.sendWithPrefix(player, "usage.nav.create", "Usage: /nav create <ticketId>  ODER  /nav create <world-type> <server-id>", "%label%", label);
@@ -295,7 +309,14 @@ public final class NavCommand implements TabExecutor {
         }
 
         if (args.length == 1) {
-            return filterPrefix(List.of("create", "delete", "join", "my-world", "confirm", "customer", "setspawn", "status", "rename", "icon"), args[0]);
+            return filterPrefix(List.of("create", "delete", "join", "my-world", "confirm", "customer", "setspawn", "status", "rename", "icon", "sort"), args[0]);
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("sort")) {
+            List<String> options = new ArrayList<>(List.of("next", "previous"));
+            for (WorldSortMode mode : WorldSortMode.values()) {
+                options.add(mode.key());
+            }
+            return filterPrefix(options, args[1]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("join")) {

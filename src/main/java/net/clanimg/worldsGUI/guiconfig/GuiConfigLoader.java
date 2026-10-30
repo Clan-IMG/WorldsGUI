@@ -6,12 +6,20 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -34,10 +42,28 @@ public final class GuiConfigLoader {
     private GuiConfigLoader() {
     }
 
+    /**
+     * SHA-256 früher ausgelieferter guis.yml-Versionen. Liegt auf einem Server noch eine dieser Dateien
+     * unverändert, wird sie beim Laden durch die aktuelle Version aus dem Jar ersetzt (mit Sicherungskopie).
+     * Angepasste Dateien bleiben unangetastet. Beim Ändern der guis.yml den Hash der alten Version hier ergänzen.
+     */
+    static final Set<String> SUPERSEDED_DEFAULT_HASHES = Set.of(
+        "c96d88033aabc0834c94a34c4a7c8bc3e31271084d60a0f5e95c60b183b09387",
+        "0835323c8844e77df957a10009205470b6a5b8e9300a156d94b2fee9074a30db",
+        "1bb5f75a91b8d041afab94287402554837df1aa7b9f908596fd2f9221966bfd3",
+        "1c9e09101eb1721b1e22c0cede8913002407a39a932b606425d8d0d8d7a0e22f",
+        "32e84c7005e12b8d146a0a6f18b50268c202857c2ab5c4f87ba08af250e2741d",
+        "60d1c2beb62315395df9e54ae974aadc35bb2d9baa5cedb3de6500e2b8b24d13",
+        "fa577f983ae8d5a1e281a2a508ec2114ef4604488fea669d04c050b3b262b11f",
+        "faa3036cafbc665fcf32278a79bd59aa2300943ea2aa8708e6cfe4efabc8f176"
+    );
+
     public static GuiConfig load(JavaPlugin plugin) {
         File file = new File(plugin.getDataFolder(), "guis.yml");
         if (!file.exists()) {
             plugin.saveResource("guis.yml", false);
+        } else {
+            replaceSupersededDefault(plugin, file);
         }
 
         YamlConfiguration root = new YamlConfiguration();
@@ -48,6 +74,31 @@ public final class GuiConfigLoader {
         }
 
         return loadFromYaml(root, plugin.getLogger());
+    }
+
+    /** Ersetzt eine unveränderte, veraltete Standard-guis.yml durch die aktuelle Version aus dem Jar. */
+    private static void replaceSupersededDefault(JavaPlugin plugin, File file) {
+        try {
+            String hash = sha256(Files.readAllBytes(file.toPath()));
+            if (!SUPERSEDED_DEFAULT_HASHES.contains(hash)) {
+                return;
+            }
+            Path backup = file.toPath().resolveSibling("guis.yml.bak-" + LocalDate.now());
+            Files.copy(file.toPath(), backup, StandardCopyOption.REPLACE_EXISTING);
+            plugin.saveResource("guis.yml", true);
+            plugin.getLogger().info("guis.yml war eine unveränderte ältere Standardversion und wurde aktualisiert"
+                + " (Sicherung: " + backup.getFileName() + ").");
+        } catch (IOException ex) {
+            plugin.getLogger().warning("guis.yml konnte nicht auf die neue Standardversion geprüft werden: " + ex.getMessage());
+        }
+    }
+
+    static String sha256(byte[] data) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     /**

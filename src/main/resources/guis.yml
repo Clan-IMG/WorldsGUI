@@ -173,7 +173,7 @@
 # PAGINATION (Seiten für automatisch befüllte Welten-Listen)
 # ------------------------------------------------------------
 # GUIs mit automatischer Welten-Anzeige (my-worlds, invited-worlds, tickets,
-# archived-tickets, recent-worlds) zeigen pro Seite so viele Welten, wie freie
+# archived-tickets) zeigen pro Seite so viele Welten, wie freie
 # Slots da sind. Mit einem "pagination"-Block (Top-Level-Feld eines GUIs)
 # erscheinen Blätter-Knöpfe - aber nur, wenn es die Seite auch gibt:
 #   pagination:
@@ -293,62 +293,64 @@ guis:
           trigger: "command"
           command: "%confirm-command%"
 
-  # Startseite bei /nav
+  # Startseite bei /nav. Untere Leiste von links: Eingeladene Welten, Tickets, Sortierung, (frei), Zurück, Weiter,
+  # Welt erstellen. Die eigenen Welten füllen die freien Slots darüber - Reihenfolge laut gewählter Sortierung.
+  # Linksklick auf eine Welt betritt sie, Rechtsklick öffnet die Einstellungen, Shift + Rechtsklick dupliziert sie
+  # (danach Server auswählen).
   my-worlds:
     gui-size: 54
     title: "Meine Welten"
     position: bottom # generiert automatisch die Welten-Anzeige in den freien Slots
     slots:
-      slot-3:
+      slot-1:
         material: "%player_head%"
         title: "Eingeladene Welten"
         action:
           trigger: "open-gui"
           gui-id: "invited-worlds"
-      slot-5:
-        material: "GRASS_BLOCK"
-        title: "Welten erstellen"
-        action:
-          trigger: "open-gui"
-          gui-id: "create-world"
-      slot-7:
+      slot-2:
         material: "COMPASS"
         title: "Tickets"
         action:
           trigger: "open-gui"
           gui-id: "tickets"
-      slot-9:
-        material: "NETHER_STAR"
-        title: "&eZuletzt besucht"
+      slot-3:
+        material: "HOPPER"
+        title: "&eSortierung: &f%sort_mode%"
         lore:
-          - "&7Deine 9 zuletzt besuchten Welten."
+          - "%sort_option_created-newest%"
+          - "%sort_option_created-oldest%"
+          - "%sort_option_visited-newest%"
+          - "%sort_option_visited-oldest%"
+          - "%sort_option_name-asc%"
+          - "%sort_option_name-desc%"
+          - ""
+          - "&7<Linksklick> &bNächste Sortierung"
+          - "&7<Rechtsklick> &bVorherige Sortierung"
+        action:
+          left-click:
+            trigger: "command"
+            command: "nav sort next" # baut "Meine Welten" mit der neuen Sortierung neu auf
+          right-click:
+            trigger: "command"
+            command: "nav sort previous" # baut "Meine Welten" mit der neuen Sortierung neu auf
+      slot-9:
+        material: "GRASS_BLOCK"
+        title: "Welt erstellen"
         action:
           trigger: "open-gui"
-          gui-id: "recent-worlds"
+          gui-id: "create-world"
     pagination:
       previous:
-        slot: 1
+        slot: 7
         material: "ARROW"
-        title: "&eVorherige Seite &7(%page%/%pages%)"
+        title: "&eZurück &7(%page%/%pages%)"
       next:
         slot: 8
         material: "ARROW"
-        title: "&eNächste Seite &7(%page%/%pages%)"
+        title: "&eWeiter &7(%page%/%pages%)"
 
-  # Die 9 zuletzt besuchten Welten des Spielers (Stern unten rechts in my-worlds).
-  # Linksklick betritt die Welt, Rechtsklick öffnet die Einstellungen (wenn man die Welt verwalten darf).
-  recent-worlds:
-    gui-size: 18
-    title: "Zuletzt besucht"
-    position: bottom # Zeile 2 = Knöpfe, Zeile 1 = die 9 Welten
-    slots:
-      slot-1:
-        material: "SPRUCE_DOOR"
-        title: "Zurück"
-        action:
-          trigger: "return"
-
-  # Rechtsklick auf eine Welt aus der dynamischen Anzeige (my-worlds, recent-worlds,
+  # Rechtsklick auf eine Welt aus der dynamischen Anzeige (my-worlds,
   # tickets ...) öffnet dieses GUI, um die jeweilige Welt zu bearbeiten. Erlaubt für den
   # Besitzer und WorldsGUI-Admins, bei Ticket-Welten auch für eingeladene Teamer (keine Kunden).
   edit-world:
@@ -609,6 +611,8 @@ guis:
           select-id: "world-type"
           select-value: "VOID"
           gui-id: "select-server" # nach Auswahl direkt weiter zum nächsten GUI
+          params:
+            server-purpose: "create"
       slot-7:
         material: "GRASS_BLOCK"
         title: "Flatworld"
@@ -617,10 +621,12 @@ guis:
           select-id: "world-type"
           select-value: "FLAT"
           gui-id: "select-server" # nach Auswahl direkt weiter zum nächsten GUI
+          params:
+            server-purpose: "create"
 
-  # Schritt 2 von 2 beim Welt-Erstellen: Server auswählen.
-  # Führt %selection:world-type% (aus create-world) und
-  # %selection:server% (aus diesem GUI) im finalen Command zusammen.
+  # Server auswählen - gemeinsam genutzt von "Welt erstellen" (Schritt 2 von 2, Welttyp aus create-world) und
+  # "Welt duplizieren" (Shift + Rechtsklick auf eine Welt). %server-purpose% ("create" oder "duplicate") setzt das
+  # aufrufende GUI bzw. das Plugin; /nav server-selected führt danach die passende Aktion aus.
   select-server:
     gui-size: 27
     title: "Server auswählen"
@@ -643,10 +649,10 @@ guis:
           select-value: "%server_id%" # interne Server-ID (nicht der Anzeigename!)
           gui-id: "confirm"
           params:
-            # /nav create <world-type> <server-id>
+            # /nav server-selected <create|duplicate> <server-id>
             # Weltname wird NICHT übergeben, sondern serverseitig automatisch
             # generiert im Format <spieler>-<id>
-            confirm-command: "nav create %selection:world-type% %selection:server%"
+            confirm-command: "nav server-selected %server-purpose% %selection:server%"
 
   invited-worlds:
     gui-size: 54
