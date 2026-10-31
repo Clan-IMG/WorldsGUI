@@ -165,6 +165,15 @@ public final class NavCommand implements TabExecutor {
                         guiManager.executeNavMyWorldRemove(player, args[2], args[3]);
                         return true;
                     }
+                    case "gamemode" -> {
+                        if (args.length < 5) {
+                            guiManager.sendWithPrefix(player, "usage.nav.my-worlds.gamemode",
+                                "Usage: /nav my-worlds gamemode <world-name> <player|*> <survival|creative|spectator|default>", "%label%", label);
+                            return true;
+                        }
+                        guiManager.executeNavMyWorldGameMode(player, args[2], args[3], args[4]);
+                        return true;
+                    }
                     case "rename" -> {
                         if (args.length < 4) {
                             guiManager.sendWithPrefix(player, "usage.nav.my-world.rename", "Usage: /nav my-world rename <world-name> <new-name>", "%label%", label);

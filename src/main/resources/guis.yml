@@ -765,6 +765,19 @@ guis:
         title: "Zurück"
         action:
           trigger: "return"
+      slot-8:
+        material: "BEDROCK"
+        title: "&fAlle anderen Spieler"
+        lore:
+          - "&7Gilt für alle, die hier nicht"
+          - "&7einzeln aufgelistet sind."
+          - ""
+          - "&eKlick &7» Spielmodus festlegen"
+        action:
+          trigger: "open-gui"
+          gui-id: "edit-others"
+          params:
+            target_player_name: "*"
       slot-9:
         material: "ANVIL"
         title: "Spieler hinzufügen"
@@ -866,6 +879,61 @@ guis:
   # /nav my-worlds trust <welt> <spieler> // gibt dem spieler die rechte in der welt zu bauen, der spieler muss aber eingeladen sein, sonst geht es nicht
   # /nav my-worlds untrust <welt> <spieler> // entfernt die bau rechte vom spieler, der spieler ist aber immer noch eingeladen und kann die welt sehen. Er hat danach immernoch visit rechte, aber keine bau rechte mehr. 
 
+  # Spielmodus für alle Spieler, die in invited-friends nicht einzeln eingestellt sind (Grundgestein).
+  edit-others:
+    gui-size: 27
+    title: "Alle anderen Spieler"
+    position: middle
+    slots:
+      slot-1:
+        material: "SPRUCE_DOOR"
+        title: "Zurück"
+        action:
+          trigger: "return"
+      slot-3:
+        material: "BEDROCK"
+        title: "&fAlle anderen Spieler"
+        lore:
+          - "&7Jeder in dieser Welt, der nicht einzeln"
+          - "&7eingestellt ist - außer dir und Admins."
+      slot-5:
+        lore:
+          - "&7Gilt in dieser Welt ohne Ausnahme -"
+          - "&7auch mit /gamemode-Rechten (außer Admins)."
+          - "&8Standard = wie bisher (Kreativ)"
+          - ""
+          - "&eKlick &7» nächster Spielmodus"
+        action:
+          trigger: "toggle"
+          toggle-id: "world-gamemode"
+          state-source: "gamemode" # Zustand live aus der Welt (für %target_player_name% bzw. * = alle anderen)
+          start-state: "default"
+          states:
+            "default":
+              material: "GRAY_DYE"
+              title: "&7Spielmodus: &fStandard"
+              command: "nav my-worlds gamemode %world% %target_player_name% survival"
+              chat-feedback: false
+              next: "survival"
+            "survival":
+              material: "IRON_SWORD"
+              title: "&7Spielmodus: &aÜberleben"
+              command: "nav my-worlds gamemode %world% %target_player_name% creative"
+              chat-feedback: false
+              next: "creative"
+            "creative":
+              material: "GRASS_BLOCK"
+              title: "&7Spielmodus: &eKreativ"
+              command: "nav my-worlds gamemode %world% %target_player_name% spectator"
+              chat-feedback: false
+              next: "spectator"
+            "spectator":
+              material: "ENDER_EYE"
+              title: "&7Spielmodus: &bZuschauer"
+              command: "nav my-worlds gamemode %world% %target_player_name% default"
+              chat-feedback: false
+              next: "default"
+
   edit-friend:
     gui-size: 27
     title: "Spieler bearbeiten"
@@ -901,6 +969,43 @@ guis:
           - "Spieler hat folgende Rechte:"
           - "%selection:world-permission%"
       slot-7:
+        lore:
+          - "&7Gilt in dieser Welt ohne Ausnahme -"
+          - "&7auch mit /gamemode-Rechten (außer Admins)."
+          - "&8Standard = wie alle anderen (Grundgestein)"
+          - ""
+          - "&eKlick &7» nächster Spielmodus"
+        action:
+          trigger: "toggle"
+          toggle-id: "world-gamemode"
+          state-source: "gamemode" # Zustand live aus der Welt (für %target_player_name% bzw. * = alle anderen)
+          start-state: "default"
+          states:
+            "default":
+              material: "GRAY_DYE"
+              title: "&7Spielmodus: &fwie alle anderen"
+              command: "nav my-worlds gamemode %world% %target_player_name% survival"
+              chat-feedback: false
+              next: "survival"
+            "survival":
+              material: "IRON_SWORD"
+              title: "&7Spielmodus: &aÜberleben"
+              command: "nav my-worlds gamemode %world% %target_player_name% creative"
+              chat-feedback: false
+              next: "creative"
+            "creative":
+              material: "GRASS_BLOCK"
+              title: "&7Spielmodus: &eKreativ"
+              command: "nav my-worlds gamemode %world% %target_player_name% spectator"
+              chat-feedback: false
+              next: "spectator"
+            "spectator":
+              material: "ENDER_EYE"
+              title: "&7Spielmodus: &bZuschauer"
+              command: "nav my-worlds gamemode %world% %target_player_name% default"
+              chat-feedback: false
+              next: "default"
+      slot-9:
         material: "BARRIER"
         title: "Entfernen"
         action:

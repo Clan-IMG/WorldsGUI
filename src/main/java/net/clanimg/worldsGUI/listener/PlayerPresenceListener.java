@@ -7,6 +7,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -45,6 +46,11 @@ public final class PlayerPresenceListener implements Listener {
         updatePresence(player.getName(), player.getWorld().getName(), true);
         guiManager.recordWorldVisit(player);
         Bukkit.getScheduler().runTask(plugin, () -> guiManager.applyWorldDefaultsOnEnter(player));
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onGameModeChange(PlayerGameModeChangeEvent event) {
+        guiManager.handleGameModeChange(event);
     }
 
     private void updatePresence(String playerName, String worldName, boolean online) {

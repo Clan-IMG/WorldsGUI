@@ -102,6 +102,7 @@ import org.bukkit.World;
 import org.bukkit.WorldCreator;
 import org.bukkit.WorldType;
 import org.bukkit.GameMode;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
@@ -172,6 +173,9 @@ public final class GuiManager {
     private final Map<UUID, String> lastAppliedLuckPermsState = new ConcurrentHashMap<>();
     private final Map<UUID, GuiTrigger> pendingAnvilInputs = new ConcurrentHashMap<>();
     private final AtomicBoolean templateSyncRunning = new AtomicBoolean();
+    private final Map<UUID, EnforcedGameMode> enforcedGameModes = new ConcurrentHashMap<>();
+    private final Set<UUID> gameModeBypass = ConcurrentHashMap.newKeySet();
+    private final Map<String, Map<String, String>> gameModeCache = new ConcurrentHashMap<>();
     private boolean warnedMissingTemplateDir;
     /** Offene Auswahl im GUI "select-instance": welche Welt, welche Instanzen standen zur Wahl. */
     private final Map<UUID, InstanceChoice> instanceChoices = new ConcurrentHashMap<>();
@@ -204,6 +208,15 @@ public final class GuiManager {
         ToggleRuntime.registerStateSource("chunky", (viewer, world) -> chunky.isRunning(world) ? "on" : "off");
         PlaceholderExpander.registerWorldPlaceholder("chunky_status", (viewer, world) -> chunkyStatusText(world));
         PlaceholderExpander.registerWorldPlaceholder("chunky_radius", (viewer, world) -> Integer.toString(chunky.radius()));
+        // Spielmodus-Schalter (Spieler bearbeiten / alle anderen): Zustand für den angeklickten Spieler bzw. "*".
+        ToggleRuntime.registerStateSource("gamemode", (viewer, world) -> {
+            String target = playerSessions.getOrCreate(viewer.getUniqueId()).guiParam("target_player_name");
+            if (target == null || target.isBlank()) {
+                return null;
+            }
+            String mode = gameModesOf(world).get(target.trim().toLowerCase(Locale.ROOT));
+            return mode == null ? "default" : mode.toLowerCase(Locale.ROOT);
+        });
         // Sortier-Item in "Meine Welten": aktueller Modus und je Modus eine (markierte) Lore-Zeile.
         PlaceholderExpander.registerPlayerPlaceholder("sort_mode", viewer -> recentWorlds.sortMode(viewer.getUniqueId()).label());
         for (WorldSortMode mode : WorldSortMode.values()) {
@@ -2199,6 +2212,138 @@ public final class GuiManager {
     public void handlePlayerQuit(Player player) {
         recentWorlds.forget(player.getUniqueId());
         instanceChoices.remove(player.getUniqueId());
+        enforcedGameModes.remove(player.getUniqueId());
+    }
+
+    // ------------------------------------------------------------------ Spielmodus je Spieler (private Welten)
+
+    private record EnforcedGameMode(String world, GameMode mode) {}
+
+    /** Admins und OPs dürfen ihren Spielmodus immer selbst wählen. */
+    private boolean isGameModeExempt(Player player) {
+        return player.isOp() || player.hasPermission(Permissions.ADMIN);
+    }
+
+    /** Spielmodi einer Welt (Name klein bzw. "*"), für die Schalter im Menü; einmal geladen, dann zwischengespeichert. */
+    private Map<String, String> gameModesOf(String worldName) {
+        String key = worldName.toLowerCase(Locale.ROOT);
+        Map<String, String> cached = gameModeCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Map<String, String> loaded = repository.findByWorldName(worldName).map(WorldEntry::gameModes).orElse(Map.of());
+        gameModeCache.put(key, new ConcurrentHashMap<>(loaded));
+        return gameModeCache.get(key);
+    }
+
+    /**
+     * Setzt den für den Spieler in seiner aktuellen Welt festgelegten Spielmodus und hält ihn dort fest (siehe
+     * {@link #handleGameModeChange}). Ohne Festlegung, für Besitzer, Admins und OPs passiert nichts.
+     */
+    public void applyGameModeRules(Player player) {
+        enforcedGameModes.remove(player.getUniqueId());
+        if (isGameModeExempt(player)) {
+            return;
+        }
+        String worldName = player.getWorld().getName();
+        UUID playerId = player.getUniqueId();
+        String playerName = player.getName();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+            entry.ifPresent(found -> gameModeCache.put(worldName.toLowerCase(Locale.ROOT), new ConcurrentHashMap<>(found.gameModes())));
+            Optional<GameMode> mode = entry.flatMap(found -> GameModeRules.enforced(found, playerName, playerId.toString()));
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.getWorld().getName().equals(worldName) || mode.isEmpty()) {
+                    return;
+                }
+                enforcedGameModes.put(playerId, new EnforcedGameMode(worldName, mode.get()));
+                if (online.getGameMode() != mode.get()) {
+                    gameModeBypass.add(playerId);
+                    try {
+                        online.setGameMode(mode.get());
+                    } finally {
+                        gameModeBypass.remove(playerId);
+                    }
+                }
+            });
+        });
+    }
+
+    /** Hält den festgelegten Spielmodus - auch gegen /gamemode-Rechte und WorldGuard; Admins/OPs ausgenommen. */
+    public void handleGameModeChange(PlayerGameModeChangeEvent event) {
+        Player player = event.getPlayer();
+        if (gameModeBypass.contains(player.getUniqueId())) {
+            return;
+        }
+        EnforcedGameMode enforced = enforcedGameModes.get(player.getUniqueId());
+        if (enforced == null || !enforced.world().equals(player.getWorld().getName())) {
+            return;
+        }
+        if (event.getNewGameMode() != enforced.mode() && !isGameModeExempt(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    /** /nav my-worlds gamemode &lt;welt&gt; &lt;spieler|*&gt; &lt;survival|creative|spectator|adventure|default&gt; */
+    public void executeNavMyWorldGameMode(Player player, String worldName, String target, String modeArg) {
+        if (!hasPermission(player, Permissions.USE, true)) {
+            return;
+        }
+        String mode = modeArg == null ? "" : modeArg.trim().toUpperCase(Locale.ROOT);
+        boolean reset = mode.equals("DEFAULT") || mode.equals("RESET");
+        if (!reset && GameModeRules.parse(mode).isEmpty()) {
+            sendWithPrefix(player, "gamemode.invalid", "&cUnbekannter Spielmodus &f%mode%&c (survival, creative, spectator, default).", "%mode%", modeArg);
+            return;
+        }
+        String targetKey = target == null ? "" : target.trim();
+        if (!targetKey.equals(GameModeRules.OTHERS) && !targetKey.matches("[A-Za-z0-9_]{1,16}")) {
+            sendWithPrefix(player, "gamemode.invalid-player", "&cUngültiger Spielername &f%player%&c.", "%player%", targetKey);
+            return;
+        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (entry.isEmpty()) {
+                    send(player, "world-not-found");
+                    return;
+                }
+                if (isTicketWorld(entry.get())) {
+                    sendWithPrefix(player, "gamemode.ticket-world", "&cDen Spielmodus kann man nur in eigenen Welten festlegen.");
+                    return;
+                }
+                if (!canManageWorld(player, entry.get())) {
+                    send(player, "not-world-owner");
+                    return;
+                }
+                String world = entry.get().worldName();
+                String newMode = reset ? null : mode;
+                // Sofort im Menü sichtbar; gespeichert wird im Hintergrund.
+                Map<String, String> modes = gameModesOf(world);
+                if (newMode == null) {
+                    modes.remove(targetKey.toLowerCase(Locale.ROOT));
+                } else {
+                    modes.put(targetKey.toLowerCase(Locale.ROOT), newMode);
+                }
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    WorldsRepository.GameModeUpdate result = repository.setWorldGameMode(world, targetKey, newMode);
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (result != WorldsRepository.GameModeUpdate.OK) {
+                            gameModeCache.remove(world.toLowerCase(Locale.ROOT));
+                            sendWithPrefix(player, result == WorldsRepository.GameModeUpdate.API_OUTDATED ? "gamemode.api-outdated" : "gamemode.failed",
+                                result == WorldsRepository.GameModeUpdate.API_OUTDATED
+                                    ? "&cDie Welten-API kennt Spielmodi noch nicht - bitte die API aktualisieren."
+                                    : "&cDer Spielmodus konnte nicht gespeichert werden.");
+                            return;
+                        }
+                        World loaded = Bukkit.getWorld(world);
+                        if (loaded != null) {
+                            loaded.getPlayers().forEach(this::applyGameModeRules);
+                        }
+                    });
+                });
+            });
+        });
     }
 
     /** Sortierung bzw. Besuche kamen erst nach dem Öffnen aus der API - offenes "Meine Welten" neu aufbauen. */
@@ -5982,12 +6127,15 @@ public final class GuiManager {
         }
 
         if (!isManagedWorld(player.getWorld())) {
+            enforcedGameModes.remove(player.getUniqueId());
             return;
         }
 
         if (worldDefaultsConfig.getBoolean("world-defaults.apply-on-join", true)) {
             applyPreferredGameMode(player, null);
         }
+        // Danach der in der Welt festgelegte Spielmodus (Spieler bearbeiten / alle anderen).
+        applyGameModeRules(player);
 
         if (shouldKeepVitalFull(player)) {
             restorePlayerVitals(player);

@@ -1213,8 +1213,50 @@ public final class WorldsRepository {
             getNullableDouble(row, "spawnY"),
             getNullableDouble(row, "spawnZ"),
             getNullableFloat(row, "spawnYaw"),
-            getNullableFloat(row, "spawnPitch")
+            getNullableFloat(row, "spawnPitch"),
+            getStringMap(row, "gameModes")
         );
+    }
+
+    private Map<String, String> getStringMap(JsonObject obj, String key) {
+        Map<String, String> out = new HashMap<>();
+        if (obj.has(key) && obj.get(key).isJsonObject()) {
+            for (Map.Entry<String, JsonElement> entry : obj.getAsJsonObject(key).entrySet()) {
+                if (entry.getValue().isJsonPrimitive()) {
+                    out.put(entry.getKey(), entry.getValue().getAsString());
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Ergebnis von {@link #setWorldGameMode}: ok, oder API kennt den Endpunkt noch nicht (alt). */
+    public enum GameModeUpdate { OK, API_OUTDATED, FAILED }
+
+    /**
+     * Spielmodus in einer privaten Welt festlegen.
+     * @param player Spielername oder "*" für alle, die nicht einzeln eingestellt sind
+     * @param mode   SURVIVAL, CREATIVE, SPECTATOR ... oder null = Einstellung entfernen
+     */
+    public GameModeUpdate setWorldGameMode(String worldName, String player, String mode) {
+        JsonObject body = new JsonObject();
+        body.addProperty("player", player);
+        if (mode == null) {
+            body.add("mode", null);
+        } else {
+            body.addProperty("mode", mode);
+        }
+        try {
+            ApiResponse response = request("PATCH", "/worlds/" + encode(worldName) + "/game-mode", gson.toJson(body));
+            if (response.statusCode() / 100 == 2) {
+                return GameModeUpdate.OK;
+            }
+            plugin.getLogger().warning("Spielmodus für " + worldName + " nicht gespeichert: HTTP " + response.statusCode());
+            return response.statusCode() == 404 || response.statusCode() == 405 ? GameModeUpdate.API_OUTDATED : GameModeUpdate.FAILED;
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Spielmodus für " + worldName + " nicht gespeichert: " + ex.getMessage());
+            return GameModeUpdate.FAILED;
+        }
     }
 
     private JsonObject parseObject(String raw) {
