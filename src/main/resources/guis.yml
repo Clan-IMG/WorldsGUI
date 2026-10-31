@@ -898,11 +898,11 @@ guis:
           - "&7eingestellt ist - außer dir und Admins."
       slot-5:
         lore:
-          - "&7Gilt in dieser Welt ohne Ausnahme -"
-          - "&7auch mit /gamemode-Rechten (außer Admins)."
-          - "&8Standard = wie bisher (Kreativ)"
+          - "&r&7Gilt in dieser Welt ohne Ausnahme"
+          - "&r&7(auch mit /gamemode-Rechten, außer Admins)."
+          - "&r&8Standard = wie bisher (Kreativ)"
           - ""
-          - "&eKlick &7» nächster Spielmodus"
+          - "&r&7<Klick> &bNächster Spielmodus"
         action:
           trigger: "toggle"
           toggle-id: "world-gamemode"
@@ -922,8 +922,14 @@ guis:
               chat-feedback: false
               next: "creative"
             "creative":
-              material: "GRASS_BLOCK"
+              material: "NETHER_STAR"
               title: "&7Spielmodus: &eKreativ"
+              command: "nav my-worlds gamemode %world% %target_player_name% adventure"
+              chat-feedback: false
+              next: "adventure"
+            "adventure":
+              material: "MAP"
+              title: "&7Spielmodus: &6Abenteuer"
               command: "nav my-worlds gamemode %world% %target_player_name% spectator"
               chat-feedback: false
               next: "spectator"
@@ -970,11 +976,11 @@ guis:
           - "%selection:world-permission%"
       slot-7:
         lore:
-          - "&7Gilt in dieser Welt ohne Ausnahme -"
-          - "&7auch mit /gamemode-Rechten (außer Admins)."
-          - "&8Standard = wie alle anderen (Grundgestein)"
+          - "&r&7Gilt in dieser Welt ohne Ausnahme"
+          - "&r&7(auch mit /gamemode-Rechten, außer Admins)."
+          - "&r&8Standard = wie alle anderen (Grundgestein)"
           - ""
-          - "&eKlick &7» nächster Spielmodus"
+          - "&r&7<Klick> &bNächster Spielmodus"
         action:
           trigger: "toggle"
           toggle-id: "world-gamemode"
@@ -994,8 +1000,14 @@ guis:
               chat-feedback: false
               next: "creative"
             "creative":
-              material: "GRASS_BLOCK"
+              material: "NETHER_STAR"
               title: "&7Spielmodus: &eKreativ"
+              command: "nav my-worlds gamemode %world% %target_player_name% adventure"
+              chat-feedback: false
+              next: "adventure"
+            "adventure":
+              material: "MAP"
+              title: "&7Spielmodus: &6Abenteuer"
               command: "nav my-worlds gamemode %world% %target_player_name% spectator"
               chat-feedback: false
               next: "spectator"

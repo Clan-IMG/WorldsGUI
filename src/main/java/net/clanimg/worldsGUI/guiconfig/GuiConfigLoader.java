@@ -49,6 +49,7 @@ public final class GuiConfigLoader {
      */
     static final Set<String> SUPERSEDED_DEFAULT_HASHES = Set.of(
         "3df5cacfac74668c47c384811c029705e49df2181d8902b222e85cfd3be5ec05",
+        "722f321b6ea8f80f75cce94b1580e62bd6d1f7bde41eb49bd9c2636af4fe9d78",
         "78f5e33589a40907651036cba0cb9769bd68f752448aa8be23043cc6f6185c4a",
         "7390369f463412c4d63fbbf0d186e64a3b7434a75bb68bbc923792e7bd7b8d5f",
         "a6c4a0110bd317371ad9c4e9b4f178456675f04b3dc2f41a8840cc2412816b81",

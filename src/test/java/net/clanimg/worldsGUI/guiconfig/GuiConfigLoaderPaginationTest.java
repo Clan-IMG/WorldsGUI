@@ -94,13 +94,19 @@ class GuiConfigLoaderPaginationTest {
         GuiTrigger others = config.get("edit-others").orElseThrow().rowSlots().get(5).action().anyClickTrigger();
         for (GuiTrigger toggle : java.util.List.of(perPlayer, others)) {
             assertEquals("gamemode", toggle.toggleStateSource());
-            assertEquals(java.util.Set.of("default", "survival", "creative", "spectator"), toggle.toggleStates().keySet());
+            assertEquals(java.util.Set.of("default", "survival", "creative", "adventure", "spectator"), toggle.toggleStates().keySet());
+            assertEquals("NETHER_STAR", toggle.toggleStates().get("creative").material());
+            assertEquals("IRON_SWORD", toggle.toggleStates().get("survival").material());
+            assertEquals("MAP", toggle.toggleStates().get("adventure").material());
+            assertEquals("ENDER_EYE", toggle.toggleStates().get("spectator").material());
         }
         GuiTrigger bedrock = config.get("invited-friends").orElseThrow().rowSlots().get(8).action().anyClickTrigger();
         assertEquals("edit-others", bedrock.guiId());
         assertEquals("*", bedrock.params().get("target_player_name"));
         assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
             "78f5e33589a40907651036cba0cb9769bd68f752448aa8be23043cc6f6185c4a"), "Stand vor den Spielmodi");
+        assertTrue(GuiConfigLoader.SUPERSEDED_DEFAULT_HASHES.contains(
+            "722f321b6ea8f80f75cce94b1580e62bd6d1f7bde41eb49bd9c2636af4fe9d78"), "erste Spielmodus-Version");
     }
 
     private YamlConfiguration bundledYaml() throws Exception {

@@ -176,6 +176,15 @@ public final class GuiManager {
     private final Map<UUID, EnforcedGameMode> enforcedGameModes = new ConcurrentHashMap<>();
     private final Set<UUID> gameModeBypass = ConcurrentHashMap.newKeySet();
     private final Map<String, Map<String, String>> gameModeCache = new ConcurrentHashMap<>();
+    private final Map<String, Long> gameModeLoadedAt = new ConcurrentHashMap<>();
+    private final Set<String> gameModeLoading = ConcurrentHashMap.newKeySet();
+    private final Map<String, PendingGameMode> gameModeWrites = new ConcurrentHashMap<>();
+    /** Speichert Spielmodi nacheinander, damit schnelle Klicks in der richtigen Reihenfolge ankommen. */
+    private final java.util.concurrent.ExecutorService gameModeWriter = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "WorldsGUI-GameMode");
+        thread.setDaemon(true);
+        return thread;
+    });
     private boolean warnedMissingTemplateDir;
     /** Offene Auswahl im GUI "select-instance": welche Welt, welche Instanzen standen zur Wahl. */
     private final Map<UUID, InstanceChoice> instanceChoices = new ConcurrentHashMap<>();
@@ -2224,16 +2233,46 @@ public final class GuiManager {
         return player.isOp() || player.hasPermission(Permissions.ADMIN);
     }
 
-    /** Spielmodi einer Welt (Name klein bzw. "*"), für die Schalter im Menü; einmal geladen, dann zwischengespeichert. */
+    /**
+     * Spielmodi einer Welt (Name klein bzw. "*") für die Schalter im Menü. Fragt nie direkt die API (das würde beim
+     * Zeichnen den Server anhalten): fehlt der Stand oder ist er älter als 30 s, wird er im Hintergrund geladen und
+     * offene Spielmodus-Menüs danach neu gezeichnet.
+     */
     private Map<String, String> gameModesOf(String worldName) {
         String key = worldName.toLowerCase(Locale.ROOT);
         Map<String, String> cached = gameModeCache.get(key);
-        if (cached != null) {
-            return cached;
+        Long loadedAt = gameModeLoadedAt.get(key);
+        if ((cached == null || loadedAt == null || System.currentTimeMillis() - loadedAt > 30_000L) && gameModeLoading.add(key)) {
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                Optional<WorldEntry> entry = repository.findByWorldName(worldName);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    gameModeLoading.remove(key);
+                    if (entry.isEmpty()) {
+                        return;
+                    }
+                    Map<String, String> modes = gameModeCache.computeIfAbsent(key, k -> new ConcurrentHashMap<>());
+                    // Noch nicht gespeicherte Klicks nicht mit dem älteren Stand überschreiben.
+                    boolean pending = gameModeWrites.keySet().stream().anyMatch(write -> write.startsWith(key + "|"));
+                    if (!pending) {
+                        modes.clear();
+                        modes.putAll(entry.get().gameModes());
+                    }
+                    gameModeLoadedAt.put(key, System.currentTimeMillis());
+                    refreshOpenGameModeGuis();
+                });
+            });
         }
-        Map<String, String> loaded = repository.findByWorldName(worldName).map(WorldEntry::gameModes).orElse(Map.of());
-        gameModeCache.put(key, new ConcurrentHashMap<>(loaded));
-        return gameModeCache.get(key);
+        return cached == null ? Map.of() : cached;
+    }
+
+    /** Offene Spielmodus-Menüs neu zeichnen (z.B. nachdem der Stand im Hintergrund geladen wurde). */
+    private void refreshOpenGameModeGuis() {
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.getOpenInventory().getTopInventory().getHolder() instanceof RuntimeGuiHolder holder
+                && ("edit-friend".equals(holder.guiId()) || "edit-others".equals(holder.guiId()))) {
+                openGui(online, holder.guiId());
+            }
+        }
     }
 
     /**
@@ -2250,7 +2289,6 @@ public final class GuiManager {
         String playerName = player.getName();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             Optional<WorldEntry> entry = repository.findByWorldName(worldName);
-            entry.ifPresent(found -> gameModeCache.put(worldName.toLowerCase(Locale.ROOT), new ConcurrentHashMap<>(found.gameModes())));
             Optional<GameMode> mode = entry.flatMap(found -> GameModeRules.enforced(found, playerName, playerId.toString()));
             Bukkit.getScheduler().runTask(plugin, () -> {
                 Player online = Bukkit.getPlayer(playerId);
@@ -2285,7 +2323,12 @@ public final class GuiManager {
         }
     }
 
-    /** /nav my-worlds gamemode &lt;welt&gt; &lt;spieler|*&gt; &lt;survival|creative|spectator|adventure|default&gt; */
+    private record PendingGameMode(UUID requester, String world, String target, String mode) {}
+
+    /**
+     * /nav my-worlds gamemode &lt;welt&gt; &lt;spieler|*&gt; &lt;survival|creative|adventure|spectator|default&gt;
+     * Sofort im Menü sichtbar; gespeichert wird nacheinander im Hintergrund - bei schnellen Klicks nur der letzte Stand.
+     */
     public void executeNavMyWorldGameMode(Player player, String worldName, String target, String modeArg) {
         if (!hasPermission(player, Permissions.USE, true)) {
             return;
@@ -2293,7 +2336,7 @@ public final class GuiManager {
         String mode = modeArg == null ? "" : modeArg.trim().toUpperCase(Locale.ROOT);
         boolean reset = mode.equals("DEFAULT") || mode.equals("RESET");
         if (!reset && GameModeRules.parse(mode).isEmpty()) {
-            sendWithPrefix(player, "gamemode.invalid", "&cUnbekannter Spielmodus &f%mode%&c (survival, creative, spectator, default).", "%mode%", modeArg);
+            sendWithPrefix(player, "gamemode.invalid", "&cUnbekannter Spielmodus &f%mode%&c (survival, creative, adventure, spectator, default).", "%mode%", modeArg);
             return;
         }
         String targetKey = target == null ? "" : target.trim();
@@ -2301,52 +2344,68 @@ public final class GuiManager {
             sendWithPrefix(player, "gamemode.invalid-player", "&cUngültiger Spielername &f%player%&c.", "%player%", targetKey);
             return;
         }
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            Optional<WorldEntry> entry = repository.findByWorldName(worldName);
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (entry.isEmpty()) {
-                    send(player, "world-not-found");
-                    return;
-                }
-                if (isTicketWorld(entry.get())) {
-                    sendWithPrefix(player, "gamemode.ticket-world", "&cDen Spielmodus kann man nur in eigenen Welten festlegen.");
-                    return;
-                }
-                if (!canManageWorld(player, entry.get())) {
-                    send(player, "not-world-owner");
-                    return;
-                }
-                String world = entry.get().worldName();
-                String newMode = reset ? null : mode;
-                // Sofort im Menü sichtbar; gespeichert wird im Hintergrund.
-                Map<String, String> modes = gameModesOf(world);
-                if (newMode == null) {
-                    modes.remove(targetKey.toLowerCase(Locale.ROOT));
-                } else {
-                    modes.put(targetKey.toLowerCase(Locale.ROOT), newMode);
-                }
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    WorldsRepository.GameModeUpdate result = repository.setWorldGameMode(world, targetKey, newMode);
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (result != WorldsRepository.GameModeUpdate.OK) {
-                            gameModeCache.remove(world.toLowerCase(Locale.ROOT));
-                            sendWithPrefix(player, result == WorldsRepository.GameModeUpdate.API_OUTDATED ? "gamemode.api-outdated" : "gamemode.failed",
-                                result == WorldsRepository.GameModeUpdate.API_OUTDATED
-                                    ? "&cDie Welten-API kennt Spielmodi noch nicht - bitte die API aktualisieren."
-                                    : "&cDer Spielmodus konnte nicht gespeichert werden.");
-                            return;
-                        }
-                        World loaded = Bukkit.getWorld(world);
-                        if (loaded != null) {
-                            loaded.getPlayers().forEach(this::applyGameModeRules);
-                        }
-                    });
-                });
-            });
-        });
+        String worldKey = worldName.toLowerCase(Locale.ROOT);
+        String playerKey = targetKey.toLowerCase(Locale.ROOT);
+        String newMode = reset ? null : mode;
+        Map<String, String> modes = gameModeCache.computeIfAbsent(worldKey, k -> new ConcurrentHashMap<>());
+        if (newMode == null) {
+            modes.remove(playerKey);
+        } else {
+            modes.put(playerKey, newMode);
+        }
+        String writeKey = worldKey + "|" + playerKey;
+        gameModeWrites.put(writeKey, new PendingGameMode(player.getUniqueId(), worldName, targetKey, newMode));
+        gameModeWriter.execute(() -> saveGameMode(writeKey));
     }
 
-    /** Sortierung bzw. Besuche kamen erst nach dem Öffnen aus der API - offenes "Meine Welten" neu aufbauen. */
+    /** Läuft im Speicher-Thread (nacheinander); ein neuerer Klick für denselben Spieler ersetzt einen noch offenen. */
+    private void saveGameMode(String writeKey) {
+        PendingGameMode pending = gameModeWrites.remove(writeKey);
+        if (pending == null) {
+            return;
+        }
+        Optional<WorldEntry> entry = repository.findByWorldName(pending.world());
+        String problem = null;
+        if (entry.isEmpty()) {
+            problem = "world";
+        } else if (isTicketWorld(entry.get())) {
+            problem = "ticket";
+        } else {
+            Player requester = Bukkit.getPlayer(pending.requester());
+            if (requester == null || !canManageWorld(requester, entry.get())) {
+                problem = "owner";
+            }
+        }
+        WorldsRepository.GameModeUpdate result = problem == null
+            ? repository.setWorldGameMode(entry.get().worldName(), pending.target(), pending.mode())
+            : WorldsRepository.GameModeUpdate.FAILED;
+        String finalProblem = problem;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player requester = Bukkit.getPlayer(pending.requester());
+            if (finalProblem != null || result != WorldsRepository.GameModeUpdate.OK) {
+                gameModeLoadedAt.remove(pending.world().toLowerCase(Locale.ROOT)); // beim nächsten Zeichnen neu laden
+                if (requester != null) {
+                    if ("world".equals(finalProblem)) {
+                        send(requester, "world-not-found");
+                    } else if ("ticket".equals(finalProblem)) {
+                        sendWithPrefix(requester, "gamemode.ticket-world", "&cDen Spielmodus kann man nur in eigenen Welten festlegen.");
+                    } else if ("owner".equals(finalProblem)) {
+                        send(requester, "not-world-owner");
+                    } else if (result == WorldsRepository.GameModeUpdate.API_OUTDATED) {
+                        sendWithPrefix(requester, "gamemode.api-outdated", "&cDie Welten-API kennt Spielmodi noch nicht - bitte die API aktualisieren.");
+                    } else {
+                        sendWithPrefix(requester, "gamemode.failed", "&cDer Spielmodus konnte nicht gespeichert werden.");
+                    }
+                }
+                gameModesOf(pending.world());
+                return;
+            }
+            World loaded = Bukkit.getWorld(entry.get().worldName());
+            if (loaded != null) {
+                loaded.getPlayers().forEach(this::applyGameModeRules);
+            }
+        });
+    }
     private void refreshMyWorldsIfOpen(UUID playerId) {
         Player player = Bukkit.getPlayer(playerId);
         if (player != null && player.getOpenInventory().getTopInventory().getHolder() instanceof RuntimeGuiHolder holder
